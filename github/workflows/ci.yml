@@ -109,8 +109,7 @@ jobs:
       - name: Build and analyze with SonarCloud
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SONAR_TOKEN:  6c1a09716696c2e3b6d97476f58fceff83e383d7
-
+          SONAR_TOKEN: 6c1a09716696c2e3b6d97476f58fceff83e383d7
         run: |
           ./gradlew build jacocoTestReport sonar \
             -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }} \
@@ -148,7 +147,7 @@ jobs:
           sarif_file: 'trivy-results.sarif'
         continue-on-error: true
 
-  build-docker-image:
+  build-and-push:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
     needs: [build-and-test, sonarcloud-analysis]
@@ -193,8 +192,45 @@ jobs:
           echo "### Docker Image Published" >> $GITHUB_STEP_SUMMARY
           echo "**Tags:** ${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
           echo "**Image:** ${{ env.DOCKER_IMAGE }}" >> $GITHUB_STEP_SUMMARY
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main'
+    environment: production
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Deploy to Production
+        run: |
+          echo "Deploying to production environment..."
+          echo "Docker image: ${{ env.DOCKER_IMAGE }}:latest"
+          echo ""
+          echo "Manual deployment steps:"
+          echo "1. SSH to your production server"
+          echo "2. Run: docker pull ${{ env.DOCKER_IMAGE }}:latest"
+          echo "3. Run: docker-compose up -d appointment-service"
+
+      - name: Run Health Check
+        run: |
+          echo "Health check instructions:"
+          echo "After deployment, verify the service is running:"
+          echo "curl -f http://your-server:8083/actuator/health"
+        continue-on-error: true
+
+      - name: Deployment Summary
+        if: success()
+        run: |
+          echo "### Production Deployment" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Pull command:**" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** Ready for manual deployment" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ env.DOCKER_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployment Commands:**" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
           echo "docker pull ${{ env.DOCKER_IMAGE }}:latest" >> $GITHUB_STEP_SUMMARY
+          echo "docker-compose up -d appointment-service" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
