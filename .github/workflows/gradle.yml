@@ -72,7 +72,6 @@ jobs:
     name: SonarCloud Code Analysis
     runs-on: ubuntu-latest
     needs: build-and-test
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
 
     steps:
       - name: Checkout Code
@@ -110,7 +109,7 @@ jobs:
       - name: Build and analyze with SonarCloud
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SONAR_TOKEN: 6c1a09716696c2e3b6d97476f58fceff83e383d7
+          SONAR_TOKEN:  6c1a09716696c2e3b6d97476f58fceff83e383d7
 
         run: |
           ./gradlew build jacocoTestReport sonar \
@@ -153,7 +152,7 @@ jobs:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
     needs: [build-and-test, sonarcloud-analysis]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
       - name: Checkout Code
@@ -191,36 +190,11 @@ jobs:
 
       - name: Docker Image Summary
         run: |
-          echo "### Docker Image Published :rocket:" >> $GITHUB_STEP_SUMMARY
+          echo "### Docker Image Published" >> $GITHUB_STEP_SUMMARY
           echo "**Tags:** ${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
           echo "**Image:** ${{ env.DOCKER_IMAGE }}" >> $GITHUB_STEP_SUMMARY
-
-  deploy:
-    name: Deploy to Server
-    runs-on: ubuntu-latest
-    needs: build-docker-image
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Deploy via Docker Compose
-        uses: appleboy/ssh-action@v1.0.0
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USERNAME }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          port: ${{ secrets.SERVER_PORT }}
-          script: |
-            cd /path/to/deployment/directory
-            docker-compose pull appointment-service
-            docker-compose up -d appointment-service
-            docker system prune -f
-
-      - name: Deployment Summary
-        run: |
-          echo "### Deployment Complete :white_check_mark:" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** Production" >> $GITHUB_STEP_SUMMARY
-          echo "**Image:** ${{ env.DOCKER_IMAGE }}:latest" >> $GITHUB_STEP_SUMMARY
-          echo "**Server:** ${{ secrets.SERVER_HOST }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Pull command:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.DOCKER_IMAGE }}:latest" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
