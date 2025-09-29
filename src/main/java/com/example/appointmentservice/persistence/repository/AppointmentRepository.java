@@ -1,6 +1,4 @@
 package com.example.appointmentservice.persistence.repository;
-
-
 import com.example.appointmentservice.persistence.model.AppointmentEntity;
 import com.example.appointmentservice.persistence.model.AppointmentStatus;
 import com.example.appointmentservice.persistence.model.AppointmentType;
@@ -15,61 +13,53 @@ import java.util.Optional;
 @Repository
 public interface AppointmentRepository extends MongoRepository<AppointmentEntity, String> {
 
-    List<AppointmentEntity> findByRequesterId(String requesterId);
-
-    List<AppointmentEntity> findByProviderId(String providerId);
-
-    List<AppointmentEntity> findByPropertyId(String propertyId);
-
     List<AppointmentEntity> findByStatus(AppointmentStatus status);
 
     List<AppointmentEntity> findByType(AppointmentType type);
 
-    @Query("{ $or: [ { 'requesterId': ?0 }, { 'providerId': ?0 } ] }")
-    List<AppointmentEntity> findByUserId(String userId);
-
     List<AppointmentEntity> findByAppointmentDateTimeBetween(LocalDateTime startDate, LocalDateTime endDate);
-
-    @Query("{ 'providerId': ?0, 'appointmentDateTime': { $gte: ?1, $lte: ?2 }, 'status': { $nin: ['CANCELLED', 'NO_SHOW'] } }")
-    List<AppointmentEntity> findProviderBookedSlots(String providerId, LocalDateTime startDate, LocalDateTime endDate);
-
-    @Query("{ 'propertyId': ?0, 'appointmentDateTime': { $gte: ?1, $lte: ?2 }, 'status': ?3 }")
-    List<AppointmentEntity> findByPropertyIdAndDateRangeAndStatus(
-            String propertyId, LocalDateTime startDate, LocalDateTime endDate, AppointmentStatus status);
-
-    @Query("{ 'status': ?0, 'appointmentDateTime': { $lte: ?1 }, 'reminderSent': false }")
-    List<AppointmentEntity> findPendingReminders(AppointmentStatus status, LocalDateTime dateTime);
 
     Optional<AppointmentEntity> findByConfirmationToken(String confirmationToken);
 
-    @Query(value = "{ 'providerId': ?0, 'appointmentDateTime': { $gte: ?1, $lt: ?2 }, 'status': { $ne: ?3 } }",
+    @Query("{ 'requester_id': ?0 }")
+    List<AppointmentEntity> findByRequesterId(Long requesterId);
+
+    @Query("{ 'provider_id': ?0 }")
+    List<AppointmentEntity> findByProviderId(Long providerId);
+
+    @Query("{ 'property_id': ?0 }")
+    List<AppointmentEntity> findByPropertyId(Long propertyId);
+
+    @Query("{ $or: [{ 'requester_id': ?0 }, { 'provider_id': ?0 }] }")
+    List<AppointmentEntity> findByUserId(Long userId);
+
+    // FIXED: Added exists = true
+    @Query(value = "{ 'requester_id': ?0, 'provider_id': ?1, 'property_id': ?2, 'appointment_date_time': ?3 }",
             exists = true)
-    boolean existsByProviderIdAndAppointmentDateTimeBetweenAndStatusNot(
-            String providerId, LocalDateTime startDateTime, LocalDateTime endDateTime, AppointmentStatus status);
+    boolean existsByRequesterIdAndProviderIdAndPropertyIdAndAppointmentDateTime(
+            Long requesterId, Long providerId, Long propertyId, LocalDateTime appointmentDateTime);
 
-    @Query("{ 'providerId': ?0, " +
-            "$and: [ " +
-            "  { $or: [ " +
-            "    { 'appointmentDateTime': { $lte: ?2 } }, " +
-            "    { $expr: { $gt: [ { $add: ['$appointmentDateTime', { $multiply: ['$durationMinutes', 60000] }] }, ?1 ] } } " +
+    @Query("{ 'status': ?0, 'reminder_sent': false, 'appointment_date_time': { $lte: ?1 } }")
+    List<AppointmentEntity> findPendingReminders(AppointmentStatus status, LocalDateTime reminderTime);
+
+    @Query("{ 'provider_id': ?0, 'appointment_date_time': { $gte: ?1, $lte: ?2 }, 'status': { $nin: ['CANCELLED', 'NO_SHOW'] } }")
+    List<AppointmentEntity> findProviderBookedSlots(Long providerId, LocalDateTime startOfDay, LocalDateTime endOfDay);
+
+    @Query(value = "{ " +
+            "'provider_id': ?0, " +
+            "'status': { $nin: ['CANCELLED', 'NO_SHOW'] }, " +
+            "'_id': { $ne: ?3 }, " +
+            "$or: [ " +
+            "  { $and: [ " +
+            "    { 'appointment_date_time': { $lt: ?2 } }, " +
+            "    { $expr: { $gt: [ { $add: ['$appointment_date_time', { $multiply: ['$duration_minutes', 60000] }] }, ?1 ] } } " +
             "  ] }, " +
-            "  { 'status': { $nin: ['CANCELLED', 'NO_SHOW'] } }, " +
-            "  { $or: [ { '_id': { $exists: false } }, { '_id': { $ne: ?3 } } ] } " +
-            "], " +
-            "count: { $gt: 0 } }")
-    boolean hasConflictingAppointment(String providerId, LocalDateTime startTime, LocalDateTime endTime, String excludeId);
-
-    // Additional useful queries for MongoDB
-    @Query("{ 'appointmentDateTime': { $gte: ?0 }, 'status': 'CONFIRMED' }")
-    List<AppointmentEntity> findUpcomingConfirmedAppointments(LocalDateTime fromDate);
-
-    @Query("{ 'requesterId': ?0, 'status': { $in: ?1 } }")
-    List<AppointmentEntity> findByRequesterIdAndStatusIn(String requesterId, List<AppointmentStatus> statuses);
-
-    @Query("{ 'providerId': ?0, 'status': { $in: ?1 } }")
-    List<AppointmentEntity> findByProviderIdAndStatusIn(String providerId, List<AppointmentStatus> statuses);
-
-    long countByRequesterIdAndStatus(String requesterId, AppointmentStatus status);
-
-    long countByProviderIdAndStatus(String providerId, AppointmentStatus status);
+            "  { $and: [ " +
+            "    { 'appointment_date_time': { $gte: ?1 } }, " +
+            "    { 'appointment_date_time': { $lt: ?2 } } " +
+            "  ] } " +
+            "] " +
+            "}",
+            exists = true)
+    boolean hasConflictingAppointment(Long providerId, LocalDateTime startTime, LocalDateTime endTime, String excludeAppointmentId);
 }

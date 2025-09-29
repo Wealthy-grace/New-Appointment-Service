@@ -1,8 +1,8 @@
-package com.example.appointmentservice.business.interfaces;
+package com.example.appointmentservice.business.client;
 
 
 // PropertyServiceClient.javae;
-import com.example.appointmentservice.domain.dto.PropertyResponse;
+import com.example.appointmentservice.domain.response.PropertyServiceResponse;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.stereotype.Component;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -13,7 +13,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 public interface PropertyServiceClient {
 
     @GetMapping("/api/v1/properties/{id}")
-    PropertyResponse getPropertyById(@PathVariable("id") Long id);
+    PropertyServiceResponse getPropertyById(@PathVariable("id") Long id);
 }
 
 // Updated DTOs to match your actual services

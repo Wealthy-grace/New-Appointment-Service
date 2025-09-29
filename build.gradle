@@ -2,6 +2,8 @@ plugins {
     id 'java'
     id 'org.springframework.boot' version '3.5.6'
     id 'io.spring.dependency-management' version '1.1.7'
+    id 'jacoco'
+    id 'org.sonarqube' version '5.1.0.4882'
 }
 
 group = 'com.example'
@@ -14,16 +16,112 @@ java {
     }
 }
 
+ext {
+    set('springCloudVersion', "2024.0.0")
+}
+
+dependencyManagement {
+    imports {
+        mavenBom "org.springframework.cloud:spring-cloud-dependencies:${springCloudVersion}"
+    }
+}
+
+configurations {
+    compileOnly {
+        extendsFrom annotationProcessor
+    }
+}
+
 repositories {
     mavenCentral()
 }
 
 dependencies {
-    implementation 'org.springframework.boot:spring-boot-starter'
-    testImplementation 'org.springframework.boot:spring-boot-starter-test'
-    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    // Spring Boot Starters
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+
+    // MongoDB - exclude embedded mongo
+    implementation('org.springframework.boot:spring-boot-starter-data-mongodb') {
+        exclude group: 'de.flapdoodle.embed', module: 'de.flapdoodle.embed.mongo'
+        exclude group: 'de.flapdoodle.embed', module: 'de.flapdoodle.embed.mongo.spring30x'
+        exclude group: 'de.flapdoodle.embed', module: 'de.flapdoodle.embed.mongo.spring'
+    }
+
+    // Spring Cloud
+    implementation 'org.springframework.cloud:spring-cloud-starter-openfeign'
+
+    // Lombok - MUST be both compileOnly AND annotationProcessor
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
+
+    // Testing
+    testImplementation('org.springframework.boot:spring-boot-starter-test') {
+        exclude group: 'de.flapdoodle.embed', module: 'de.flapdoodle.embed.mongo'
+        exclude group: 'de.flapdoodle.embed', module: 'de.flapdoodle.embed.mongo.spring30x'
+        exclude group: 'de.flapdoodle.embed', module: 'de.flapdoodle.embed.mongo.spring'
+    }
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:testcontainers:1.19.8'
+    testImplementation 'org.testcontainers:mongodb:1.19.8'
+    testImplementation 'org.testcontainers:junit-jupiter:1.19.8'
+    testImplementation 'org.springframework.security:spring-security-test'
+
+    // Lombok for tests too
+    testCompileOnly 'org.projectlombok:lombok'
+    testAnnotationProcessor 'org.projectlombok:lombok'
 }
 
-tasks.named('test') {
+// Exclude embedded mongo globally
+configurations.all {
+    exclude group: 'de.flapdoodle.embed', module: 'de.flapdoodle.embed.mongo'
+    exclude group: 'de.flapdoodle.embed', module: 'de.flapdoodle.embed.mongo.spring30x'
+    exclude group: 'de.flapdoodle.embed', module: 'de.flapdoodle.embed.mongo.spring'
+}
+
+// Enable annotation processing
+tasks.withType(JavaCompile) {
+    options.compilerArgs += ['-parameters']
+}
+
+// Test configuration
+test {
     useJUnitPlatform()
+    finalizedBy jacocoTestReport
+}
+
+// JaCoCo configuration
+jacoco {
+    toolVersion = "0.8.12"
+}
+
+jacocoTestReport {
+    dependsOn test
+    reports {
+        xml.required = true
+        csv.required = false
+        html.required = true
+        html.outputLocation = layout.buildDirectory.dir('reports/jacoco/test')
+        xml.outputLocation = layout.buildDirectory.file('reports/jacoco/test/jacocoTestReport.xml')
+    }
+}
+
+// SonarQube configuration
+sonarqube {
+    properties {
+        property "sonar.projectKey", "godfrey10_appointment-service"
+        property "sonar.projectName", "Appointment Service"
+        property "sonar.organization", "godfrey10"
+        property "sonar.host.url", "https://sonarcloud.io"
+        property "sonar.sources", "src/main/java"
+        property "sonar.tests", "src/test/java"
+        property "sonar.java.binaries", "build/classes/java/main"
+        property "sonar.coverage.jacoco.xmlReportPaths", "build/reports/jacoco/test/jacocoTestReport.xml"
+    }
+}
+
+tasks.named('sonarqube') {
+    dependsOn test, jacocoTestReport
 }
