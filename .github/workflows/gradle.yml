@@ -112,7 +112,7 @@ jobs:
       - name: Build and analyze with SonarCloud
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_TOKEN: 6c1a09716696c2e3b6d97476f58fceff83e383d7
         run: |
           ./gradlew build jacocoTestReport sonar \
             -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }} \
