@@ -4,7 +4,8 @@ on:
   push:
     branches: [ main, develop ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, develop ]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -21,7 +22,10 @@ env:
   SONAR_PROJECT_KEY: Wealthy-grace_New-Appointment-Service
 
 jobs:
-  test:
+  # -----------------------------
+  # 1. Build and Test
+  # -----------------------------
+  build-and-test:
     name: Run Tests and Code Analysis
     runs-on: ubuntu-latest
 
@@ -51,6 +55,7 @@ jobs:
         with:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: ${{ env.JAVA_DISTRIBUTION }}
+          cache: gradle
 
       - name: Cache Gradle packages
         uses: actions/cache@v4
@@ -66,39 +71,25 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Run Tests with Coverage
-        run: ./gradlew clean test jacocoTestReport --continue
+        run: ./gradlew clean test jacocoTestReport --no-daemon --continue
         env:
           SPRING_DATA_MONGODB_URI: mongodb://admin:admin123@localhost:27017/appointment-service?authSource=admin
           SPRING_DATA_MONGODB_DATABASE: appointment-service
           SPRING_PROFILES_ACTIVE: test
 
-      - name: Cache SonarCloud packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.sonar/cache
-          key: ${{ runner.os }}-sonar
-          restore-keys: ${{ runner.os }}-sonar
+      - name: Build application
+        run: ./gradlew bootJar -x test --no-daemon
 
-      - name: SonarCloud Analysis
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: |
-          ./gradlew sonar \
-            -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }} \
-            -Dsonar.organization=wealthy-grace \
-            -Dsonar.host.url=https://sonarcloud.io \
-            --info
-        continue-on-error: true
-
-      - name: Upload Test Results
+      - name: Upload test results
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: test-results
           path: |
-            build/reports/tests/test/
+            build/test-results/test/
             build/reports/jacoco/test/
+            build/reports/tests/test/
+          retention-days: 7
 
       - name: Publish Test Results
         uses: dorny/test-reporter@v1
@@ -108,12 +99,104 @@ jobs:
           path: build/test-results/test/*.xml
           reporter: java-junit
           fail-on-error: false
-          only-summary: false
 
-  build-and-push:
+      - name: Upload JAR artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: jar-artifacts
+          path: build/libs/*.jar
+          retention-days: 7
+
+  # -----------------------------
+  # 2. SonarCloud Analysis
+  # -----------------------------
+  code-quality-sonarqube:
+    name: SonarCloud Code Analysis
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: github.actor != 'dependabot[bot]'
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          cache: gradle
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
+      - name: Cache SonarCloud packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Build and analyze with SonarCloud
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          ./gradlew build jacocoTestReport sonar \
+            -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }} \
+            -Dsonar.organization=wealthy-grace \
+            -Dsonar.host.url=https://sonarcloud.io \
+            --info \
+            --no-daemon
+        continue-on-error: true
+
+  # -----------------------------
+  # 3. Security Scanning
+  # -----------------------------
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    permissions:
+      security-events: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # -----------------------------
+  # 4. Docker Build & Push
+  # -----------------------------
+  build-docker:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
-    needs: test
+    needs: [build-and-test, code-quality-sonarqube]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
 
     steps:
@@ -125,6 +208,7 @@ jobs:
         with:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: ${{ env.JAVA_DISTRIBUTION }}
+          cache: gradle
 
       - name: Cache Gradle packages
         uses: actions/cache@v4
@@ -172,32 +256,13 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  security-scan:
-    name: Security Scan
-    runs-on: ubuntu-latest
-    needs: test
-
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-
-      - name: Upload Trivy scan results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: 'trivy-results.sarif'
-
+  # -----------------------------
+  # 5. Deploy to Staging
+  # -----------------------------
   deploy-staging:
     name: Deploy to Staging
     runs-on: ubuntu-latest
-    needs: build-and-push
+    needs: build-docker
     if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'
     environment: staging
 
@@ -215,10 +280,13 @@ jobs:
           echo "Running health check..."
           # Add health check commands here
 
+  # -----------------------------
+  # 6. Deploy to Production
+  # -----------------------------
   deploy-production:
     name: Deploy to Production
     runs-on: ubuntu-latest
-    needs: build-and-push
+    needs: build-docker
     if: github.ref == 'refs/heads/main'
     environment: production
 
