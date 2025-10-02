@@ -26,19 +26,19 @@ jobs:
     runs-on: ubuntu-latest
 
     services:
-      postgres:
-        image: postgres:15-alpine
+      mongodb:
+        image: mongo:7.0
         env:
-          POSTGRES_PASSWORD: Server123@
-          POSTGRES_USER: postgres
-          POSTGRES_DB: appointment-service
+          MONGO_INITDB_ROOT_USERNAME: admin
+          MONGO_INITDB_ROOT_PASSWORD: admin123
+          MONGO_INITDB_DATABASE: appointment-service
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "mongosh --eval 'db.runCommand({ping: 1})'"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
         ports:
-          - 5432:5432
+          - 27017:27017
 
     steps:
       - name: Checkout Code
@@ -68,9 +68,8 @@ jobs:
       - name: Run Tests with Coverage
         run: ./gradlew clean test jacocoTestReport --continue
         env:
-          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/appointment-service
-          SPRING_DATASOURCE_USERNAME: postgres
-          SPRING_DATASOURCE_PASSWORD: Server123@
+          SPRING_DATA_MONGODB_URI: mongodb://admin:admin123@localhost:27017/appointment-service?authSource=admin
+          SPRING_DATA_MONGODB_DATABASE: appointment-service
           SPRING_PROFILES_ACTIVE: test
 
       - name: Cache SonarCloud packages
