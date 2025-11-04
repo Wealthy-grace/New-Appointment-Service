@@ -8,6 +8,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Data
@@ -42,11 +43,33 @@ public class AppointmentDto {
     private String providerName;
     private String propertyTitle;
     private String propertyAddress;
+    private Boolean propertyIsRented;
     private String propertyImage;
     private String propertyImage2;
     private String propertyImage3;
+    private String propertyImage4;
     private LocalDateTime endDateTime;
     private Boolean canCancel;
     private Boolean canReschedule;
     private Integer daysUntilAppointment;
+
+
+     //Requester fields
+    private String requesterEmail;
+    private String requesterPhone;
+    private String requesterFirstName;
+    private String requesterLastName;
+    private String requesterProfileImage;
+
+    // Provider fields
+    private String providerUsername;
+    private String providerEmail;
+    private String providerPhone;
+    private String providerFirstName;
+    private String providerLastName;
+    private String providerProfileImage;
+
+    // Additional property fields (if not already present)
+    private String propertyDescription;
+    private BigDecimal propertyRentAmount;
 }

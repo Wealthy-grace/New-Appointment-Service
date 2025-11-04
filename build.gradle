@@ -43,6 +43,29 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'org.springframework.boot:spring-boot-starter-security'
 
+
+    // Oauth2
+    implementation 'org.springframework.boot:spring-boot-starter-oauth2-client'
+    implementation 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'
+
+
+    //Keycloak
+    // Keycloak Admin Client - for user management operations
+    implementation 'org.keycloak:keycloak-admin-client:23.0.0'
+
+
+    // ✅ NEW: Resilience4J Circuit Breaker
+    implementation 'org.springframework.cloud:spring-cloud-starter-circuitbreaker-resilience4j'
+    implementation 'io.github.resilience4j:resilience4j-spring-boot3:2.1.0'
+
+    // ✅ NEW: Actuator for monitoring
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+    // ✅ NEW: Micrometer for metrics (optional but recommended)
+    implementation 'io.micrometer:micrometer-registry-prometheus'
+
+
+
     // MongoDB - exclude embedded mongo
     implementation('org.springframework.boot:spring-boot-starter-data-mongodb') {
         exclude group: 'de.flapdoodle.embed', module: 'de.flapdoodle.embed.mongo'
@@ -51,7 +74,13 @@ dependencies {
     }
 
     // Spring Cloud
-    implementation 'org.springframework.cloud:spring-cloud-starter-openfeign'
+   // implementation 'org.springframework.cloud:spring-cloud-starter-openfeign'
+
+    // Spring Boot AMQP starter for RabbitMQ support
+    implementation 'org.springframework.boot:spring-boot-starter-amqp'
+
+    // Spring Boot WebFlux (includes new RestClient)
+    implementation 'org.springframework.boot:spring-boot-starter-webflux'
 
     // Lombok - MUST be both compileOnly AND annotationProcessor
     compileOnly 'org.projectlombok:lombok'
@@ -72,6 +101,11 @@ dependencies {
     // Lombok for tests too
     testCompileOnly 'org.projectlombok:lombok'
     testAnnotationProcessor 'org.projectlombok:lombok'
+
+    // JWT dependencies
+    implementation 'io.jsonwebtoken:jjwt-api:0.11.5'
+    runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.11.5'
+    runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.11.5'
 }
 
 // Exclude embedded mongo globally
@@ -90,6 +124,12 @@ tasks.withType(JavaCompile) {
 test {
     useJUnitPlatform()
     finalizedBy jacocoTestReport
+}
+
+dependencyManagement {
+    imports {
+        mavenBom "org.springframework.cloud:spring-cloud-dependencies:${springCloudVersion}"
+    }
 }
 
 // JaCoCo configuration
@@ -119,6 +159,8 @@ sonarqube {
         property "sonar.tests", "src/test/java"
         property "sonar.java.binaries", "build/classes/java/main"
         property "sonar.coverage.jacoco.xmlReportPaths", "build/reports/jacoco/test/jacocoTestReport.xml"
+        property "sonar.host.url=http://localhost:9001"
+        property "sonar.token", "sqp_cd14802c9be98a5dda9d24403d36b4c6d8d71689"
     }
 }
 

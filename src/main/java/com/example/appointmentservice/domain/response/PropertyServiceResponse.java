@@ -19,6 +19,7 @@ public class PropertyServiceResponse {
     private String address;
     private String propertyType;
     private BigDecimal rentAmount;
+    private boolean isRented;
     private String image;
     private String image2;
     private String image3;

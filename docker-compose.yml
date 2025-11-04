@@ -1,6 +1,182 @@
-version: '3.8'
+#services:
+#  # MongoDB Database
+#  mongodb:
+#    image: mongo:7.0
+#    container_name: appointment-service-mongodb
+#    environment:
+#      MONGO_INITDB_DATABASE: appointment-service
+#    ports:
+#      - "27017:27017"
+#    volumes:
+#      - mongodb_data:/data/db
+#      - mongodb_config:/data/configdb
+#    networks:
+#      - shared-microservices-network
+#    healthcheck:
+#      test: ["CMD-SHELL", "mongosh --eval 'db.runCommand(\"ping\").ok' --quiet"]
+#      interval: 30s
+#      timeout: 10s
+#      retries: 3
+#      start_period: 60s
+#    restart: unless-stopped
+#
+#  # SonarQube PostgreSQL Database
+#  appointment-sonarqube-postgres:
+#    image: postgres:15-alpine
+#    container_name: appointment-sonarqube-postgres
+#    environment:
+#      POSTGRES_DB: appointment_sonarqube
+#      POSTGRES_USER: sonar
+#      POSTGRES_PASSWORD: sonar123
+#    ports:
+#      - "5433:5432"
+#    volumes:
+#      - appointment_sonarqube_postgres_data:/var/lib/postgresql/data
+#    networks:
+#      - shared-microservices-network
+#    healthcheck:
+#      test: ["CMD-SHELL", "pg_isready -U sonar -d appointment_sonarqube"]
+#      interval: 30s
+#      timeout: 10s
+#      retries: 3
+#      start_period: 60s
+#    restart: unless-stopped
+#
+#  # SonarQube Server
+#  appointment-sonarqube:
+#    image: sonarqube:10.7.0-community
+#    container_name: appointment-sonarqube-server
+#    environment:
+#      SONAR_JDBC_URL: jdbc:postgresql://appointment-sonarqube-postgres:5432/appointment_sonarqube
+#      SONAR_JDBC_USERNAME: sonar
+#      SONAR_JDBC_PASSWORD: sonar123
+#      SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: true
+#      SONAR_WEB_JAVAADDITIONALOPTS: "-Xmx512m -Xms128m"
+#      SONAR_CE_JAVAADDITIONALOPTS: "-Xmx512m -Xms128m"
+#    ports:
+#      - "9001:9000"
+#    volumes:
+#      - appointment_sonarqube_data:/opt/sonarqube/data
+#      - appointment_sonarqube_extensions:/opt/sonarqube/extensions
+#      - appointment_sonarqube_logs:/opt/sonarqube/logs
+#    depends_on:
+#      appointment-sonarqube-postgres:
+#        condition: service_healthy
+#    networks:
+#      - shared-microservices-network
+#    healthcheck:
+#      test: ["CMD-SHELL", "curl -f http://localhost:9000/api/system/status || exit 1"]
+#      interval: 60s
+#      timeout: 30s
+#      retries: 5
+#      start_period: 180s
+#    restart: unless-stopped
+#    ulimits:
+#      nofile:
+#        soft: 65536
+#        hard: 65536
+#
+#  # Appointment Service Application
+#  appointment-service:
+#    build:
+#      context: .
+#      dockerfile: Dockerfile
+#    image: godfrey10/appointment-service:latest
+#    container_name: appointment-service-app
+#    ports:
+#      - "8083:8083"
+#    environment:
+#      # Spring Profile
+#      SPRING_PROFILES_ACTIVE: docker
+#
+#      # MongoDB Configuration
+#      SPRING_DATA_MONGODB_URI: mongodb://mongodb:27017/appointment-service
+#      SPRING_DATA_MONGODB_AUTO_INDEX_CREATION: true
+#
+#      # Application Name
+#      SPRING_APPLICATION_NAME: Appointment-Service
+#
+#      # Server Configuration
+#      SERVER_PORT: 8083
+#
+#      # Spring Cloud Configuration
+#      EUREKA_CLIENT_ENABLED: false
+#      SPRING_CLOUD_DISCOVERY_ENABLED: false
+#      SPRING_CLOUD_CONFIG_ENABLED: false
+#      SPRING_CLOUD_SERVICE_REGISTRY_AUTO_REGISTRATION_ENABLED: false
+#      SPRING_CLOUD_FEATURES_ENABLED: false
+#      SPRING_CLOUD_COMPATIBILITY_VERIFIER_ENABLED: false
+#
+#      # JWT Configuration - MUST MATCH USER SERVICE
+#      SPRING_APP_JWTSECRET: mySecretKey123912738aopsgjnspkmndfsopkvajoirjg94gf2opfng2moknm
+#      SPRING_APP_JWTEXPIRATIONMS: 3000000
+#
+#      # Service URLs - Inter-service communication (USE CONTAINER NAMES)
+#      APP_SERVICES_USER_SERVICE_URL: http://user-service-app:8081
+#      APP_SERVICES_PROPERTY_SERVICE_URL: http://property-service-app:8082
+#
+#      # Feign Client Timeout Configuration (in milliseconds)
+#      FEIGN_CLIENT_CONFIG_DEFAULT_CONNECTTIMEOUT: 10000
+#      FEIGN_CLIENT_CONFIG_DEFAULT_READTIMEOUT: 30000
+#      FEIGN_CLIENT_CONFIG_DEFAULT_LOGGERLEVEL: FULL
+#
+#      # Logging Configuration
+#      LOGGING_LEVEL_ROOT: INFO
+#      LOGGING_LEVEL_COM_EXAMPLE_APPOINTMENTSERVICE: DEBUG
+#      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_DATA_MONGODB_CORE_MONGOTEMPLATE: DEBUG
+#      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_DATA_MONGODB: DEBUG
+#      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_WEB: DEBUG
+#      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_WEB_CLIENT: DEBUG
+#      LOGGING_PATTERN_CONSOLE: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+#
+#      # Actuator Configuration
+#      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: health,info
+#      MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS: always
+#      MANAGEMENT_ENDPOINTS_ENABLED_BY_DEFAULT: true
+#
+#      # SonarQube Configuration
+#      SONAR_HOST_URL: http://appointment-sonarqube:9000
+#      SONAR_LOGIN: admin
+#      SONAR_PASSWORD: admin
+#    depends_on:
+#      mongodb:
+#        condition: service_healthy
+#      appointment-sonarqube:
+#        condition: service_healthy
+#    networks:
+#      - shared-microservices-network
+#    healthcheck:
+#      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8083/actuator/health"]
+#      interval: 30s
+#      timeout: 3s
+#      retries: 3
+#      start_period: 120s
+#    restart: unless-stopped
+#
+#volumes:
+#  mongodb_data:
+#    driver: local
+#  mongodb_config:
+#    driver: local
+#  appointment_sonarqube_postgres_data:
+#    driver: local
+#  appointment_sonarqube_data:
+#    driver: local
+#  appointment_sonarqube_extensions:
+#    driver: local
+#  appointment_sonarqube_logs:
+#    driver: local
+#
+#networks:
+#  shared-microservices-network:
+#    external: true
+
+
+#New Updated Docker Compose File
 
 services:
+  # ==================== APPOINTMENT SERVICE ====================
+
   # MongoDB Database
   mongodb:
     image: mongo:7.0
@@ -13,15 +189,16 @@ services:
       - mongodb_data:/data/db
       - mongodb_config:/data/configdb
     networks:
-      - appointment-service-network
+      - shared-microservices-network
     healthcheck:
       test: ["CMD-SHELL", "mongosh --eval 'db.runCommand(\"ping\").ok' --quiet"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
+    restart: unless-stopped
 
-  # SonarQube PostgreSQL Database for Appointment Service
+  # Appointment Service SonarQube PostgreSQL
   appointment-sonarqube-postgres:
     image: postgres:15-alpine
     container_name: appointment-sonarqube-postgres
@@ -30,19 +207,20 @@ services:
       POSTGRES_USER: sonar
       POSTGRES_PASSWORD: sonar123
     ports:
-      - "5433:5432"  # Different port to avoid conflict with property-service
+      - "5433:5432"
     volumes:
       - appointment_sonarqube_postgres_data:/var/lib/postgresql/data
     networks:
-      - appointment-service-network
+      - shared-microservices-network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sonar -d appointment_sonarqube"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
+    restart: unless-stopped
 
-  # SonarQube Server for Appointment Service
+  # Appointment Service SonarQube Server
   appointment-sonarqube:
     image: sonarqube:10.7.0-community
     container_name: appointment-sonarqube-server
@@ -54,7 +232,7 @@ services:
       SONAR_WEB_JAVAADDITIONALOPTS: "-Xmx512m -Xms128m"
       SONAR_CE_JAVAADDITIONALOPTS: "-Xmx512m -Xms128m"
     ports:
-      - "9001:9000"  # Different port (9001) to avoid conflict with property-service (9000)
+      - "9001:9000"
     volumes:
       - appointment_sonarqube_data:/opt/sonarqube/data
       - appointment_sonarqube_extensions:/opt/sonarqube/extensions
@@ -63,7 +241,7 @@ services:
       appointment-sonarqube-postgres:
         condition: service_healthy
     networks:
-      - appointment-service-network
+      - shared-microservices-network
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:9000/api/system/status || exit 1"]
       interval: 60s
@@ -84,47 +262,73 @@ services:
     image: godfrey10/appointment-service:latest
     container_name: appointment-service-app
     environment:
-      SPRING_PROFILES_ACTIVE: docker
+      # Spring Profile
+      SPRING_PROFILES_ACTIVE: default
+
+      # MongoDB Configuration
       SPRING_DATA_MONGODB_URI: mongodb://mongodb:27017/appointment-service
       SPRING_DATA_MONGODB_AUTO_INDEX_CREATION: true
+
+      # Application Configuration
       SPRING_APPLICATION_NAME: Appointment-Service
       SERVER_PORT: 8083
-      EUREKA_CLIENT_ENABLED: false
-      SPRING_CLOUD_DISCOVERY_ENABLED: false
-      SPRING_CLOUD_CONFIG_ENABLED: false
-      SPRING_CLOUD_SERVICE_REGISTRY_AUTO_REGISTRATION_ENABLED: false
-      SPRING_CLOUD_FEATURES_ENABLED: false
-      SPRING_CLOUD_COMPATIBILITY_VERIFIER_ENABLED: false
+      SPRING_MAIN_ALLOW_BEAN_DEFINITION_OVERRIDING: true
+
+      # Keycloak OAuth2 Configuration - Use localhost:8090 for token validation
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://localhost:8090/realms/friendly-housing
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/friendly-housing/protocol/openid-connect/certs
+
+      # Keycloak Admin Client Configuration - Use keycloak:8080 for internal Docker communication
+      KEYCLOAK_AUTH_SERVER_URL: http://keycloak:8080
+      KEYCLOAK_REALM: friendly-housing
+      KEYCLOAK_RESOURCE: appointment-service
+      KEYCLOAK_CREDENTIALS_SECRET: Lrf6ZwUcAqOnvg4fl89kKyiOLCaWDb6B
+
+      # Service URLs - Inter-service communication (USE CONTAINER NAMES)
+      APP_SERVICES_USER_SERVICE_URL: http://user-service-app:8081
+      APP_SERVICES_PROPERTY_SERVICE_URL: http://property-service-app:8082
+
+      # Feign Client Timeout Configuration (in milliseconds)
+      FEIGN_CLIENT_CONFIG_DEFAULT_CONNECTTIMEOUT: 10000
+      FEIGN_CLIENT_CONFIG_DEFAULT_READTIMEOUT: 30000
+      FEIGN_CLIENT_CONFIG_DEFAULT_LOGGERLEVEL: FULL
+
+      # Actuator/Monitoring Configuration
+      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: health,metrics,prometheus,info
+      MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS: always
+      MANAGEMENT_METRICS_EXPORT_PROMETHEUS_ENABLED: true
+
+      # Logging Configuration
       LOGGING_LEVEL_ROOT: INFO
       LOGGING_LEVEL_COM_EXAMPLE_APPOINTMENTSERVICE: DEBUG
       LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_DATA_MONGODB_CORE_MONGOTEMPLATE: DEBUG
       LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_DATA_MONGODB: DEBUG
-      LOGGING_PATTERN_CONSOLE: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
-      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: health,info
-      MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS: always
-      MANAGEMENT_ENDPOINTS_ENABLED_BY_DEFAULT: true
-      # Connect to Appointment Service's own SonarQube
-      SONAR_HOST_URL: http://appointment-sonarqube:9000
-      SONAR_LOGIN: admin
-      SONAR_PASSWORD: admin
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_WEB: DEBUG
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SECURITY: DEBUG
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SECURITY_OAUTH2: DEBUG
+
+      # Spring Cloud Configuration
+      SPRING_CLOUD_COMPATIBILITY_VERIFIER_ENABLED: false
+
     ports:
       - "8083:8083"
     depends_on:
       mongodb:
         condition: service_healthy
-      appointment-sonarqube:
-        condition: service_healthy
     networks:
-      - appointment-service-network
+      - shared-microservices-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8083/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8083/actuator/health || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 5
       start_period: 120s
     restart: unless-stopped
 
 volumes:
+  # Appointment Service volumes
   mongodb_data:
     driver: local
   mongodb_config:
@@ -139,5 +343,5 @@ volumes:
     driver: local
 
 networks:
-  appointment-service-network:
-    driver: bridge
+  shared-microservices-network:
+    external: true

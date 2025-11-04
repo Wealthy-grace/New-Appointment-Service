@@ -1,20 +1,18 @@
 package com.example.appointmentservice.business.client;
 
-
-// PropertyServiceClient.javae;
 import com.example.appointmentservice.domain.response.PropertyServiceResponse;
-import org.springframework.cloud.openfeign.FeignClient;
-import org.springframework.stereotype.Component;
-import org.springframework.web.bind.annotation.GetMapping;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.service.annotation.GetExchange;
+import org.springframework.web.service.annotation.HttpExchange;
 
-@Component
-@FeignClient(name = "property-service", url = "${app.services.property-service.url:http://localhost:8082}")
+
+@HttpExchange
 public interface PropertyServiceClient {
 
-    @GetMapping("/api/v1/properties/{id}")
+    @GetExchange("/api/v1/properties/{id}")
+    @CircuitBreaker(name = "propertyService", fallbackMethod = "getPropertyFallback")
+    @Retry(name = "propertyService")
     PropertyServiceResponse getPropertyById(@PathVariable("id") Long id);
 }
-
-// Updated DTOs to match your actual services
-// UserDto.java

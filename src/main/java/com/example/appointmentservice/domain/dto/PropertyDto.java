@@ -21,7 +21,6 @@ public class PropertyDto {
     private String locationType;
     private BigDecimal rentAmount;
     private String description;
-
     private String surfaceArea;
     private Integer bedrooms;
     private Integer quantity;
@@ -30,6 +29,7 @@ public class PropertyDto {
     private String availableDate;
     private String postalCode;
     private String rentalcondition;
+    private boolean isRented;
     private BigDecimal securityDeposit;
     private String image;
     private String image2;

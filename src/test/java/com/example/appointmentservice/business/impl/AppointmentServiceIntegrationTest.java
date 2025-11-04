@@ -1,4 +1,5 @@
 package com.example.appointmentservice.business.impl;
+
 import java.time.temporal.ChronoUnit;
 import com.example.appointmentservice.AppointmentServiceApplication;
 import com.example.appointmentservice.business.client.PropertyServiceClient;
@@ -16,7 +17,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
@@ -32,7 +32,6 @@ import static org.mockito.Mockito.*;
 
 @SpringBootTest(classes = AppointmentServiceApplication.class)
 @ActiveProfiles("test")
-@Import(MongoTestContainerConfig.class)
 public class AppointmentServiceIntegrationTest {
 
     @Autowired
@@ -77,7 +76,7 @@ public class AppointmentServiceIntegrationTest {
         existingAppointment = AppointmentEntity.builder()
                 .appointmentTitle("Existing Appointment")
                 .description("Existing Description")
-                .appointmentDateTime(LocalDateTime.now().plusDays(1))
+                .appointmentDateTime(LocalDateTime.now().plusDays(1).truncatedTo(ChronoUnit.MILLIS))
                 .durationMinutes(60)
                 .status(AppointmentStatus.PENDING)
                 .type(AppointmentType.PROPERTY_VIEWING)
@@ -89,8 +88,8 @@ public class AppointmentServiceIntegrationTest {
                 .isRecurring(false)
                 .confirmationToken("existing-token")
                 .reminderSent(false)
-                .createdAt(LocalDateTime.now())
-                .updatedAt(LocalDateTime.now())
+                .createdAt(LocalDateTime.now().truncatedTo(ChronoUnit.MILLIS))
+                .updatedAt(LocalDateTime.now().truncatedTo(ChronoUnit.MILLIS))
                 .build();
 
         existingAppointment = appointmentRepository.save(existingAppointment);
@@ -98,14 +97,7 @@ public class AppointmentServiceIntegrationTest {
         when(userServiceClient.getUserByUsername(anyString())).thenReturn(testUser);
         when(userServiceClient.getUserById(anyLong())).thenReturn(testUser);
         when(propertyServiceClient.getPropertyById(anyLong())).thenReturn(testProperty);
-
-
-
     }
-
-
-
-
 
     @AfterEach
     void tearDown() {
@@ -117,7 +109,7 @@ public class AppointmentServiceIntegrationTest {
         AppointmentRequest request = AppointmentRequest.builder()
                 .appointmentTitle("New Appointment")
                 .description("New Description")
-                .appointmentDateTime(LocalDateTime.now().plusDays(2))
+                .appointmentDateTime(LocalDateTime.now().plusDays(2).truncatedTo(ChronoUnit.MILLIS))
                 .durationMinutes(90)
                 .type(AppointmentType.PROPERTY_VIEWING)
                 .propertyId(2L)
@@ -317,7 +309,6 @@ public class AppointmentServiceIntegrationTest {
 
         AppointmentEntity unchangedAppointment = appointmentRepository.findById(existingAppointment.getId()).orElse(null);
         assertNotNull(unchangedAppointment);
-        // Truncate for comparison since MongoDB only stores millisecond precision
         assertEquals(existingAppointment.getAppointmentDateTime().truncatedTo(ChronoUnit.MILLIS),
                 unchangedAppointment.getAppointmentDateTime());
         assertEquals(AppointmentStatus.PENDING, unchangedAppointment.getStatus());
@@ -437,10 +428,9 @@ public class AppointmentServiceIntegrationTest {
 
     @Test
     void getAppointmentsByUserId_Success() {
-        // Create second appointment with userId=1 as REQUESTER or PROVIDER
         AppointmentEntity userAppointment2 = createTestAppointment("User Appointment 2",
                 "Second appointment for user", LocalDateTime.now().plusDays(2).truncatedTo(ChronoUnit.MILLIS),
-                AppointmentStatus.CONFIRMED, 1L, 1L, 2L);  // Changed requesterId from 3L to 1L
+                AppointmentStatus.CONFIRMED, 1L, 1L, 2L);
         appointmentRepository.save(userAppointment2);
 
         AppointmentResponse response = appointmentService.getAppointmentsByUserId("1");
@@ -457,10 +447,11 @@ public class AppointmentServiceIntegrationTest {
         assertTrue(titles.contains("Existing Appointment"));
         assertTrue(titles.contains("User Appointment 2"));
     }
+
     @Test
     void getAppointmentsByRequesterId_Success() {
         AppointmentEntity requesterAppointment2 = createTestAppointment("Requester Appointment 2",
-                "Second appointment for requester", LocalDateTime.now().plusDays(3),
+                "Second appointment for requester", LocalDateTime.now().plusDays(3).truncatedTo(ChronoUnit.MILLIS),
                 AppointmentStatus.PENDING, 2L, 1L, 4L);
         appointmentRepository.save(requesterAppointment2);
 
@@ -476,7 +467,7 @@ public class AppointmentServiceIntegrationTest {
     @Test
     void getAppointmentsByProviderId_Success() {
         AppointmentEntity providerAppointment2 = createTestAppointment("Provider Appointment 2",
-                "Second appointment for provider", LocalDateTime.now().plusDays(4),
+                "Second appointment for provider", LocalDateTime.now().plusDays(4).truncatedTo(ChronoUnit.MILLIS),
                 AppointmentStatus.CONFIRMED, 3L, 3L, 2L);
         appointmentRepository.save(providerAppointment2);
 
@@ -492,7 +483,7 @@ public class AppointmentServiceIntegrationTest {
     @Test
     void getAppointmentsByPropertyId_Success() {
         AppointmentEntity propertyAppointment2 = createTestAppointment("Property Appointment 2",
-                "Second appointment for property", LocalDateTime.now().plusDays(5),
+                "Second appointment for property", LocalDateTime.now().plusDays(5).truncatedTo(ChronoUnit.MILLIS),
                 AppointmentStatus.PENDING, 1L, 4L, 3L);
         appointmentRepository.save(propertyAppointment2);
 
@@ -508,12 +499,12 @@ public class AppointmentServiceIntegrationTest {
     @Test
     void getAppointmentsByStatus_Success() {
         AppointmentEntity confirmedAppointment = createTestAppointment("Confirmed Appointment",
-                "A confirmed appointment", LocalDateTime.now().plusDays(6),
+                "A confirmed appointment", LocalDateTime.now().plusDays(6).truncatedTo(ChronoUnit.MILLIS),
                 AppointmentStatus.CONFIRMED, 2L, 5L, 3L);
         appointmentRepository.save(confirmedAppointment);
 
         AppointmentEntity cancelledAppointment = createTestAppointment("Cancelled Appointment",
-                "A cancelled appointment", LocalDateTime.now().plusDays(7),
+                "A cancelled appointment", LocalDateTime.now().plusDays(7).truncatedTo(ChronoUnit.MILLIS),
                 AppointmentStatus.CANCELLED, 3L, 6L, 4L);
         appointmentRepository.save(cancelledAppointment);
 
@@ -530,7 +521,7 @@ public class AppointmentServiceIntegrationTest {
     @Test
     void getAppointmentsByType_Success() {
         AppointmentEntity maintenanceAppointment = createTestAppointment("Maintenance Appointment",
-                "A maintenance appointment", LocalDateTime.now().plusDays(8),
+                "A maintenance appointment", LocalDateTime.now().plusDays(8).truncatedTo(ChronoUnit.MILLIS),
                 AppointmentStatus.PENDING, 4L, 7L, 5L);
         maintenanceAppointment.setType(AppointmentType.MAINTENANCE_REQUEST);
         appointmentRepository.save(maintenanceAppointment);
@@ -587,8 +578,9 @@ public class AppointmentServiceIntegrationTest {
         assertTrue(notes.contains("Total: 4"));
         assertTrue(notes.contains("Completed: 1"));
         assertTrue(notes.contains("Cancelled: 1"));
-        assertTrue(notes.contains("Upcoming: 2"));  // Changed from 1 to 2
+        assertTrue(notes.contains("Upcoming: 2"));
     }
+
     @Test
     void hasConflictingAppointment_WithConflict_ReturnsTrue() {
         LocalDateTime conflictStart = existingAppointment.getAppointmentDateTime().plusMinutes(30);
@@ -613,11 +605,11 @@ public class AppointmentServiceIntegrationTest {
 
     @Test
     void getAppointmentsByDateRange_Success() {
-        LocalDateTime startDate = LocalDateTime.now();
-        LocalDateTime endDate = LocalDateTime.now().plusDays(7);
+        LocalDateTime startDate = LocalDateTime.now().truncatedTo(ChronoUnit.MILLIS);
+        LocalDateTime endDate = LocalDateTime.now().plusDays(7).truncatedTo(ChronoUnit.MILLIS);
 
         AppointmentEntity dateRangeAppointment = createTestAppointment("Date Range Appointment",
-                "Appointment within date range", LocalDateTime.now().plusDays(3),
+                "Appointment within date range", LocalDateTime.now().plusDays(3).truncatedTo(ChronoUnit.MILLIS),
                 AppointmentStatus.PENDING, 8L, 9L, 10L);
         appointmentRepository.save(dateRangeAppointment);
 
@@ -638,7 +630,7 @@ public class AppointmentServiceIntegrationTest {
         AppointmentRequest request = AppointmentRequest.builder()
                 .appointmentTitle("Fallback Test")
                 .description("Test with service failure")
-                .appointmentDateTime(LocalDateTime.now().plusDays(5))
+                .appointmentDateTime(LocalDateTime.now().plusDays(5).truncatedTo(ChronoUnit.MILLIS))
                 .durationMinutes(60)
                 .type(AppointmentType.PROPERTY_VIEWING)
                 .propertyId(10L)
@@ -665,7 +657,7 @@ public class AppointmentServiceIntegrationTest {
         AppointmentRequest request = AppointmentRequest.builder()
                 .appointmentTitle("Property Fallback Test")
                 .description("Test with property service failure")
-                .appointmentDateTime(LocalDateTime.now().plusDays(6))
+                .appointmentDateTime(LocalDateTime.now().plusDays(6).truncatedTo(ChronoUnit.MILLIS))
                 .durationMinutes(60)
                 .type(AppointmentType.PROPERTY_VIEWING)
                 .propertyId(11L)
@@ -702,8 +694,8 @@ public class AppointmentServiceIntegrationTest {
                 .isRecurring(false)
                 .confirmationToken("test-token-" + System.currentTimeMillis())
                 .reminderSent(false)
-                .createdAt(LocalDateTime.now())
-                .updatedAt(LocalDateTime.now())
+                .createdAt(LocalDateTime.now().truncatedTo(ChronoUnit.MILLIS))
+                .updatedAt(LocalDateTime.now().truncatedTo(ChronoUnit.MILLIS))
                 .build();
     }
 }

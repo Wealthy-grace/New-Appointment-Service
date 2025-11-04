@@ -11,10 +11,15 @@ import com.example.appointmentservice.domain.dto.UserDto;
 import com.example.appointmentservice.domain.request.AppointmentRequest;
 import com.example.appointmentservice.domain.response.AppointmentResponse;
 import com.example.appointmentservice.exception.AppointmentNotFoundException;
+
 import com.example.appointmentservice.persistence.model.AppointmentEntity;
 import com.example.appointmentservice.persistence.model.AppointmentStatus;
 import com.example.appointmentservice.persistence.model.AppointmentType;
 import com.example.appointmentservice.persistence.repository.AppointmentRepository;
+import com.example.appointmentservice.producer.AppointmentEvent;
+import com.example.appointmentservice.producer.AppointmentEventProducer;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -35,6 +40,43 @@ public class AppointmentServiceImpl implements AppointmentService {
     private final AppointmentMapperDto appointmentMapper;
     private final UserServiceClient userServiceClient;
     private final PropertyServiceClient propertyServiceClient;
+    private final AppointmentEventProducer appointmentEventProducer;
+
+
+
+    // ========== CIRCUIT BREAKER METHODS ==========
+
+    @CircuitBreaker(name = "propertyService", fallbackMethod = "getPropertyFallback")
+    @Retry(name = "propertyService")
+    public PropertyServiceResponse getPropertyWithCircuitBreaker(Long propertyId) {
+        log.debug("🔍 [APPOINTMENT] Calling Property Service for ID: {}", propertyId);
+        return propertyServiceClient.getPropertyById(propertyId);
+    }
+
+    private PropertyDto getPropertyFallback(Long propertyId, Exception ex) {
+        log.error("⚠️ [APPOINTMENT] PROPERTY SERVICE CB ACTIVATED for ID: {}", propertyId);
+
+        PropertyDto fallback = new PropertyDto();
+        fallback.setId(propertyId);
+        fallback.setTitle("Property Temporarily Unavailable");
+        return fallback;
+    }
+
+    @CircuitBreaker(name = "userService", fallbackMethod = "getUserFallback")
+    @Retry(name = "userService")
+    public UserDto getUserWithCircuitBreaker(Long userId) {
+        log.debug("🔍 [APPOINTMENT] Calling User Service for ID: {}", userId);
+        return userServiceClient.getUserById(userId);
+    }
+
+    private UserDto getUserFallback(Long userId, Exception ex) {
+        log.error("⚠️ [APPOINTMENT] USER SERVICE CB ACTIVATED for ID: {}", userId);
+
+        UserDto fallback = new UserDto();
+        fallback.setId(userId);
+        fallback.setEmail("fallback@system.local");
+        return fallback;
+    }
 
     @Override
     public AppointmentResponse createAppointment(AppointmentRequest request) {
@@ -42,40 +84,40 @@ public class AppointmentServiceImpl implements AppointmentService {
             log.info("Creating appointment: {} for user: {} and property: {}",
                     request.getAppointmentTitle(), request.getRequesterUsername(), request.getPropertyId());
 
-
-            // Validate appointment time is not in the past
             if (request.getAppointmentDateTime().isBefore(LocalDateTime.now())) {
                 return AppointmentResponse.error("Appointment time cannot be in the past", "INVALID_TIME");
             }
 
-            // Validate and get user data with fallback
-            UserDto userDto = validateAndGetUser(request.getRequesterUsername());
-
-            // Validate and get property data with fallback
+            UserDto requesterDto = validateAndGetUser(request.getRequesterUsername());
+            UserDto providerDto = validateAndGetUserById(request.getProviderId());
             PropertyDto propertyDto = validateAndGetProperty(request.getPropertyId());
 
-            // Check for duplicate appointments
             if (isDuplicateAppointment(request)) {
                 return AppointmentResponse.error("Duplicate appointment already exists", "DUPLICATE_APPOINTMENT");
             }
 
-            // Check for provider time conflicts
             LocalDateTime endTime = request.getAppointmentDateTime().plusMinutes(request.getDurationMinutes());
             if (hasConflictingAppointment(String.valueOf(request.getProviderId()), request.getAppointmentDateTime(), endTime, null)) {
                 return AppointmentResponse.error("Provider has a conflicting appointment at this time", "TIME_CONFLICT");
             }
 
-            // Create and save appointment
             AppointmentEntity appointment = createAppointmentEntity(request);
             AppointmentEntity savedAppointment = appointmentRepository.save(appointment);
 
-            // Convert to DTO and enrich with external data
             AppointmentDto appointmentDto = appointmentMapper.toDto(savedAppointment);
-            enrichAppointmentDto(appointmentDto, userDto, propertyDto);
+            enrichAppointmentDto(appointmentDto, requesterDto, providerDto, propertyDto);
 
-            log.info("Successfully created appointment ID: {} for property: {} by user: {}",
-                    savedAppointment.getId(), request.getPropertyId(), request.getRequesterUsername());
+            // ✅ PUBLISH EVENT TO RABBITMQ
+            try {
+                AppointmentEvent event = createAppointmentEvent(appointmentDto, "APPOINTMENT_CREATED");
+                appointmentEventProducer.publishAppointmentCreated(event);
+                log.info("Published APPOINTMENT_CREATED event for appointment ID: {}", savedAppointment.getId());
+            } catch (Exception e) {
+                log.warn("Failed to publish appointment created event: {}", e.getMessage());
+                // Don't fail the entire operation if event publishing fails
+            }
 
+            log.info("Successfully created appointment ID: {}", savedAppointment.getId());
             return AppointmentResponse.success("Appointment created successfully", appointmentDto);
 
         } catch (Exception e) {
@@ -93,8 +135,6 @@ public class AppointmentServiceImpl implements AppointmentService {
                     .orElseThrow(() -> new AppointmentNotFoundException(appointmentId, "Appointment not found"));
 
             AppointmentDto appointmentDto = appointmentMapper.toDto(appointment);
-
-            // Try to enrich with external data
             enrichAppointmentDtoSafely(appointmentDto);
 
             return AppointmentResponse.success("Appointment retrieved successfully", appointmentDto);
@@ -288,6 +328,16 @@ public class AppointmentServiceImpl implements AppointmentService {
             appointment.setUpdatedAt(LocalDateTime.now());
             AppointmentEntity savedAppointment = appointmentRepository.save(appointment);
             AppointmentDto appointmentDto = appointmentMapper.toDto(savedAppointment);
+            enrichAppointmentDtoSafely(appointmentDto);
+
+            // ✅ PUBLISH EVENT TO RABBITMQ
+            try {
+                AppointmentEvent event = createAppointmentEvent(appointmentDto, "APPOINTMENT_CONFIRMED");
+                appointmentEventProducer.publishAppointmentConfirmed(event);
+                log.info("Published APPOINTMENT_CONFIRMED event for appointment ID: {}", appointmentId);
+            } catch (Exception e) {
+                log.warn("Failed to publish appointment confirmed event: {}", e.getMessage());
+            }
 
             log.info("Successfully confirmed appointment: {}", appointmentId);
             return AppointmentResponse.success("Appointment confirmed successfully", appointmentDto);
@@ -316,6 +366,16 @@ public class AppointmentServiceImpl implements AppointmentService {
             appointment.setUpdatedAt(LocalDateTime.now());
             AppointmentEntity savedAppointment = appointmentRepository.save(appointment);
             AppointmentDto appointmentDto = appointmentMapper.toDto(savedAppointment);
+            enrichAppointmentDtoSafely(appointmentDto);
+
+            // ✅ PUBLISH EVENT TO RABBITMQ
+            try {
+                AppointmentEvent event = createAppointmentEvent(appointmentDto, "APPOINTMENT_CONFIRMED");
+                appointmentEventProducer.publishAppointmentConfirmed(event);
+                log.info("Published APPOINTMENT_CONFIRMED event for token confirmation");
+            } catch (Exception e) {
+                log.warn("Failed to publish appointment confirmed event: {}", e.getMessage());
+            }
 
             return AppointmentResponse.success("Appointment confirmed successfully", appointmentDto);
 
@@ -345,6 +405,17 @@ public class AppointmentServiceImpl implements AppointmentService {
             appointment.setUpdatedAt(LocalDateTime.now());
             AppointmentEntity savedAppointment = appointmentRepository.save(appointment);
             AppointmentDto appointmentDto = appointmentMapper.toDto(savedAppointment);
+            enrichAppointmentDtoSafely(appointmentDto);
+
+            // ✅ PUBLISH EVENT TO RABBITMQ
+            try {
+                AppointmentEvent event = createAppointmentEvent(appointmentDto, "APPOINTMENT_CANCELLED");
+                event.setCancellationReason(cancellationReason);
+                appointmentEventProducer.publishAppointmentCancelled(event);
+                log.info("Published APPOINTMENT_CANCELLED event for appointment ID: {}", appointmentId);
+            } catch (Exception e) {
+                log.warn("Failed to publish appointment cancelled event: {}", e.getMessage());
+            }
 
             log.info("Successfully cancelled appointment: {}", appointmentId);
             return AppointmentResponse.success("Appointment cancelled successfully", appointmentDto);
@@ -379,11 +450,23 @@ public class AppointmentServiceImpl implements AppointmentService {
                 return AppointmentResponse.error("Provider has a conflicting appointment at the new time", "TIME_CONFLICT");
             }
 
+            LocalDateTime oldDateTime = appointment.getAppointmentDateTime();
             appointment.setAppointmentDateTime(newDateTime);
             appointment.setStatus(AppointmentStatus.RESCHEDULED);
             appointment.setUpdatedAt(LocalDateTime.now());
             AppointmentEntity savedAppointment = appointmentRepository.save(appointment);
             AppointmentDto appointmentDto = appointmentMapper.toDto(savedAppointment);
+            enrichAppointmentDtoSafely(appointmentDto);
+
+            // ✅ PUBLISH EVENT TO RABBITMQ
+            try {
+                AppointmentEvent event = createAppointmentEvent(appointmentDto, "APPOINTMENT_RESCHEDULED");
+                event.setPreviousDateTime(oldDateTime);
+                appointmentEventProducer.publishAppointmentRescheduled(event);
+                log.info("Published APPOINTMENT_RESCHEDULED event for appointment ID: {}", appointmentId);
+            } catch (Exception e) {
+                log.warn("Failed to publish appointment rescheduled event: {}", e.getMessage());
+            }
 
             log.info("Successfully rescheduled appointment: {} to {}", appointmentId, newDateTime);
             return AppointmentResponse.success("Appointment rescheduled successfully", appointmentDto);
@@ -413,6 +496,16 @@ public class AppointmentServiceImpl implements AppointmentService {
             appointment.setUpdatedAt(LocalDateTime.now());
             AppointmentEntity savedAppointment = appointmentRepository.save(appointment);
             AppointmentDto appointmentDto = appointmentMapper.toDto(savedAppointment);
+            enrichAppointmentDtoSafely(appointmentDto);
+
+            // ✅ PUBLISH EVENT TO RABBITMQ
+            try {
+                AppointmentEvent event = createAppointmentEvent(appointmentDto, "APPOINTMENT_COMPLETED");
+                appointmentEventProducer.publishAppointmentCompleted(event);
+                log.info("Published APPOINTMENT_COMPLETED event for appointment ID: {}", appointmentId);
+            } catch (Exception e) {
+                log.warn("Failed to publish appointment completed event: {}", e.getMessage());
+            }
 
             log.info("Successfully completed appointment: {}", appointmentId);
             return AppointmentResponse.success("Appointment marked as completed", appointmentDto);
@@ -462,9 +555,7 @@ public class AppointmentServiceImpl implements AppointmentService {
                 return AppointmentResponse.error("Cannot update completed or cancelled appointment", "INVALID_STATUS");
             }
 
-            // Update modifiable fields
             appointment.setAppointmentTitle(request.getAppointmentTitle());
-            //appointment.setPropertyAddress(request.getPropertyAddress());
             appointment.setDescription(request.getDescription());
             appointment.setLocation(request.getLocation());
             appointment.setNotes(request.getNotes());
@@ -551,7 +642,6 @@ public class AppointmentServiceImpl implements AppointmentService {
         try {
             log.info("Retrieving statistics for user: {}", userId);
 
-            // Convert Long to String for repository method compatibility
             String userIdStr = String.valueOf(userId);
             List<AppointmentEntity> userAppointments = appointmentRepository.findByUserId(Long.valueOf(userIdStr));
 
@@ -607,16 +697,14 @@ public class AppointmentServiceImpl implements AppointmentService {
         try {
             log.info("Retrieving appointments for property {} with full details", propertyId);
 
-            // Convert Long to String for repository method compatibility
             String propertyIdStr = String.valueOf(propertyId);
             List<AppointmentEntity> appointments = appointmentRepository.findByPropertyId(Long.valueOf(propertyIdStr));
 
-            // Get property details once for efficiency
             PropertyDto propertyDto = validateAndGetPropertyById(propertyId);
 
             List<AppointmentDto> enrichedAppointments = appointments.stream()
                     .map(appointmentMapper::toDto)
-                    .peek(dto -> enrichAppointmentDto(dto, null, propertyDto))
+                    .peek(dto -> enrichAppointmentDto(dto, null, null, propertyDto))
                     .collect(Collectors.toList());
 
             return AppointmentResponse.success(
@@ -634,7 +722,6 @@ public class AppointmentServiceImpl implements AppointmentService {
         try {
             log.info("Retrieving appointments for requester {} with full details", requesterId);
 
-            // Convert Long to String for repository method compatibility
             String requesterIdStr = String.valueOf(requesterId);
             List<AppointmentEntity> appointments = appointmentRepository.findByRequesterId(Long.valueOf(requesterIdStr));
             List<AppointmentDto> enrichedAppointments = appointments.stream()
@@ -659,34 +746,56 @@ public class AppointmentServiceImpl implements AppointmentService {
             UserDto user = userServiceClient.getUserByUsername(username);
             if (user != null) {
                 log.info("Successfully retrieved user data for: {}", username);
+                log.debug("User details - Email: {}, FirstName: {}, LastName: {}, Phone: {}",
+                        user.getEmail(), user.getFirstName(), user.getLastName(), user.getPhoneNumber());
                 return user;
             }
         } catch (Exception e) {
             log.warn("Could not retrieve user data for {}: {} - using fallback", username, e.getMessage());
         }
 
-        // Create fallback user data
-        UserDto fallbackUser = new UserDto();
-        fallbackUser.setUsername(username);
-        fallbackUser.setFirstName(fallbackUser.getFullName().split(" ")[0]);
-        fallbackUser.setLastName("User");
-        return fallbackUser;
+        return createFallbackUser(null, username);
+    }
+
+    private UserDto validateAndGetUserById(Long userId) {
+        try {
+            UserDto user = userServiceClient.getUserById(userId);
+            if (user != null) {
+                log.info("Successfully retrieved user data for ID: {}", userId);
+                log.debug("User details - Email: {}, FirstName: {}, LastName: {}, Phone: {}",
+                        user.getEmail(), user.getFirstName(), user.getLastName(), user.getPhoneNumber());
+                return user;
+            }
+        } catch (Exception e) {
+            log.warn("Could not retrieve user data for ID {}: {} - using fallback", userId, e.getMessage());
+        }
+
+        return createFallbackUser(userId, null);
     }
 
     private PropertyDto validateAndGetProperty(Long propertyId) {
         try {
-            Long propertyIdLong = Long.parseLong(String.valueOf(propertyId));
-            return validateAndGetPropertyById(propertyIdLong);
-        } catch (NumberFormatException e) {
-            log.warn("Invalid property ID format: {} - using fallback", propertyId);
+            return validateAndGetPropertyById(propertyId);
+        } catch (Exception e) {
+            log.warn("Invalid property ID: {} - using fallback", propertyId);
             return createFallbackProperty(propertyId);
         }
     }
 
     private PropertyDto validateAndGetPropertyById(Long propertyId) {
         try {
+            log.info("Attempting to fetch property data for ID: {}", propertyId);
             PropertyServiceResponse response = propertyServiceClient.getPropertyById(propertyId);
-            if (response != null && response.isSuccess()) {
+
+            if (response == null) {
+                log.warn("PropertyServiceClient returned NULL response for property ID: {}", propertyId);
+                return createFallbackProperty(propertyId);
+            }
+
+            log.info("PropertyServiceResponse received - Success: {}, PropertyId: {}, Title: {}",
+                    response.isSuccess(), response.getPropertyId(), response.getTitle());
+
+            if (response.isSuccess()) {
                 log.info("Successfully retrieved property data for ID: {}", propertyId);
 
                 PropertyDto propertyDto = new PropertyDto();
@@ -694,38 +803,54 @@ public class AppointmentServiceImpl implements AppointmentService {
                 propertyDto.setTitle(response.getTitle());
                 propertyDto.setDescription(response.getDescription());
                 propertyDto.setRentAmount(response.getRentAmount());
-                propertyDto.setAddress(response.getAddress()); // PropertyService doesn't return address
+                propertyDto.setAddress(response.getAddress());
+                propertyDto.setRented(response.isRented());
                 propertyDto.setImage(response.getImage());
                 propertyDto.setImage2(response.getImage2());
                 propertyDto.setImage3(response.getImage3());
+                propertyDto.setImage4(response.getImage4());
+
+                log.info("Property DTO created - Title: {}, Image: {}", propertyDto.getTitle(), propertyDto.getImage());
                 return propertyDto;
+            } else {
+                log.warn("PropertyServiceResponse returned success=false for property ID: {}", propertyId);
             }
         } catch (Exception e) {
-            log.warn("Could not retrieve property data for {}: {} - using fallback", propertyId, e.getMessage());
+            log.error("Exception while fetching property data for ID {}: {}", propertyId, e.getMessage(), e);
         }
 
-        // Create fallback property data
-        PropertyDto fallbackProperty = new PropertyDto();
-        fallbackProperty.setId(propertyId);
-        fallbackProperty.setTitle("Property #" + propertyId);
-        fallbackProperty.setAddress("Address  available" + propertyId);
-        fallbackProperty.setImage("image-" + propertyId);
-        fallbackProperty.setImage2("image2-" + propertyId);
-        fallbackProperty.setImage3("image3-" + propertyId);
+        log.info("Using fallback property data for ID: {}", propertyId);
+        return createFallbackProperty(propertyId);
+    }
 
-        return fallbackProperty;
+    private UserDto createFallbackUser(Long userId, String username) {
+        UserDto fallbackUser = new UserDto();
+
+        if (userId != null) {
+            fallbackUser.setId(userId);
+            fallbackUser.setUsername("User" + userId);
+            fallbackUser.setFirstName("User");
+            fallbackUser.setLastName(String.valueOf(userId));
+            fallbackUser.setEmail("user" + userId + "@example.com");
+        } else if (username != null) {
+            fallbackUser.setUsername(username);
+            fallbackUser.setFirstName(username);
+            fallbackUser.setLastName("User");
+            fallbackUser.setEmail(username + "@example.com");
+        }
+
+        return fallbackUser;
     }
 
     private PropertyDto createFallbackProperty(Long propertyId) {
         PropertyDto fallbackProperty = new PropertyDto();
-        try {
-            fallbackProperty.setId(propertyId);
-        } catch (NumberFormatException e) {
-            fallbackProperty.setId(0L);
-        }
+        fallbackProperty.setId(propertyId);
         fallbackProperty.setTitle("Property #" + propertyId);
-        fallbackProperty.setAddress("Property #" + propertyId);
-        fallbackProperty.setImage("Property #" + propertyId);
+        fallbackProperty.setAddress("Address not available");
+        fallbackProperty.setDescription("Description not available");
+        fallbackProperty.setImage("default-property-image.jpg");
+        fallbackProperty.setImage2("default-property-image-2.jpg");
+        fallbackProperty.setImage3("default-property-image-3.jpg");
         return fallbackProperty;
     }
 
@@ -746,7 +871,6 @@ public class AppointmentServiceImpl implements AppointmentService {
     private AppointmentEntity createAppointmentEntity(AppointmentRequest request) {
         AppointmentEntity appointment = new AppointmentEntity();
         appointment.setAppointmentTitle(request.getAppointmentTitle());
-       // appointment.setPropertyAddress(request.getPropertyAddress());
         appointment.setDescription(request.getDescription());
         appointment.setAppointmentDateTime(request.getAppointmentDateTime());
         appointment.setDurationMinutes(request.getDurationMinutes());
@@ -766,85 +890,107 @@ public class AppointmentServiceImpl implements AppointmentService {
         return appointment;
     }
 
-    private void enrichAppointmentDto(AppointmentDto dto, UserDto userDto, PropertyDto propertyDto) {
-        // Set user information
-        if (userDto != null) {
-            dto.setRequesterName(userDto.getFullName());
+    private void enrichAppointmentDto(AppointmentDto dto, UserDto requesterDto, UserDto providerDto, PropertyDto propertyDto) {
+        // Set requester information
+        if (requesterDto != null) {
+            String requesterFirstName = requesterDto.getFirstName();
+            String requesterLastName = requesterDto.getLastName();
+
+            if (requesterFirstName == null || requesterFirstName.trim().isEmpty()) {
+                requesterFirstName = requesterDto.getUsername();
+            }
+            if (requesterLastName == null || requesterLastName.trim().isEmpty()) {
+                requesterLastName = "";
+            }
+
+            dto.setRequesterName(requesterDto.getFullName() != null ?
+                    requesterDto.getFullName() : (requesterFirstName + " " + requesterLastName).trim());
+            dto.setRequesterUsername(requesterDto.getUsername());
+            dto.setRequesterEmail(requesterDto.getEmail());
+            dto.setRequesterPhone(requesterDto.getPhoneNumber());
+            dto.setRequesterFirstName(requesterFirstName);
+            dto.setRequesterLastName(requesterLastName);
+            dto.setRequesterProfileImage(requesterDto.getProfileImage() != null ?
+                    requesterDto.getProfileImage() : "default-avatar.png");
+        }
+
+        // Set provider information
+        if (providerDto != null) {
+            String providerFirstName = providerDto.getFirstName();
+            String providerLastName = providerDto.getLastName();
+
+            if (providerFirstName == null || providerFirstName.trim().isEmpty()) {
+                providerFirstName = providerDto.getUsername();
+            }
+            if (providerLastName == null || providerLastName.trim().isEmpty()) {
+                providerLastName = "";
+            }
+
+            dto.setProviderName(providerDto.getFullName() != null ?
+                    providerDto.getFullName() : (providerFirstName + " " + providerLastName).trim());
+            dto.setProviderUsername(providerDto.getUsername());
+            dto.setProviderEmail(providerDto.getEmail());
+            dto.setProviderPhone(providerDto.getPhoneNumber());
+            dto.setProviderFirstName(providerFirstName);
+            dto.setProviderLastName(providerLastName);
+            dto.setProviderProfileImage(providerDto.getProfileImage() != null ?
+                    providerDto.getProfileImage() : "default-avatar.png");
         }
 
         // Set property information
         if (propertyDto != null) {
             dto.setPropertyTitle(propertyDto.getTitle());
 
-            // Use appointment location as address if property address is null
             String address = propertyDto.getAddress();
-            if (address == null || address.trim().isEmpty()) {
-                address = dto.getLocation(); // Use "123 Main Street, Apartment 4B"
+            if (address == null || address.trim().isEmpty() || address.equals("Address not available")) {
+                address = dto.getLocation();
             }
             dto.setPropertyAddress(address);
 
-            // Set property images
+            dto.setPropertyIsRented(propertyDto.isRented());
             dto.setPropertyImage(propertyDto.getImage());
             dto.setPropertyImage2(propertyDto.getImage2());
             dto.setPropertyImage3(propertyDto.getImage3());
+            dto.setPropertyImage4(propertyDto.getImage4());
+            dto.setPropertyDescription(propertyDto.getDescription());
+            dto.setPropertyRentAmount(propertyDto.getRentAmount());
+        }
 
-
-        // Set calculated fields
+        // Set calendar information
         if (dto.getAppointmentDateTime() != null && dto.getDurationMinutes() != null) {
             dto.setEndDateTime(dto.getAppointmentDateTime().plusMinutes(dto.getDurationMinutes()));
             long daysUntil = ChronoUnit.DAYS.between(LocalDateTime.now(), dto.getAppointmentDateTime());
             dto.setDaysUntilAppointment((int) daysUntil);
         }
 
-        // Set business logic flags
-        dto.setCanCancel(canCancelAppointment(dto.getStatus()));
-        dto.setCanReschedule(canRescheduleAppointment(dto.getStatus()));
-    }
-
-        // Set calculated fields
-        if (dto.getAppointmentDateTime() != null && dto.getDurationMinutes() != null) {
-            dto.setEndDateTime(dto.getAppointmentDateTime().plusMinutes(dto.getDurationMinutes()));
-            long daysUntil = ChronoUnit.DAYS.between(LocalDateTime.now(), dto.getAppointmentDateTime());
-            dto.setDaysUntilAppointment((int) daysUntil);
-        }
-
-        // Set business logic flags
         dto.setCanCancel(canCancelAppointment(dto.getStatus()));
         dto.setCanReschedule(canRescheduleAppointment(dto.getStatus()));
     }
 
     private void enrichAppointmentDtoSafely(AppointmentDto dto) {
         try {
-            // Try to get user data if we have a requesterId
-            UserDto userDto = null;
+            UserDto requesterDto = null;
             if (dto.getRequesterId() != null) {
                 try {
-                    // Convert requesterId to Long and fetch user by ID
-                    Long requesterIdLong = Long.parseLong(String.valueOf(dto.getRequesterId()));
-                    userDto = userServiceClient.getUserById(requesterIdLong);
-                    log.debug("Successfully retrieved user data for ID: {}", dto.getRequesterId());
+                    Long requesterIdLong = Long.valueOf(String.valueOf(dto.getRequesterId()));
+                    requesterDto = userServiceClient.getUserById(requesterIdLong);
+                    log.debug("Successfully retrieved requester data for ID: {}", dto.getRequesterId());
                 } catch (Exception e) {
-                    log.debug("Could not fetch user data by ID for enrichment: {}", e.getMessage());
+                    log.debug("Could not fetch requester data by ID for enrichment: {}", e.getMessage());
                 }
             }
 
-            // Try to get provider data if we have a providerId
             UserDto providerDto = null;
             if (dto.getProviderId() != null) {
                 try {
-                    // Convert providerId to Long and fetch provider by ID
-                    Long providerIdLong = Long.parseLong(String.valueOf(dto.getProviderId()));
+                    Long providerIdLong = Long.valueOf(String.valueOf(dto.getProviderId()));
                     providerDto = userServiceClient.getUserById(providerIdLong);
-                    if (providerDto != null) {
-                        dto.setProviderName(providerDto.getFullName());
-                    }
                     log.debug("Successfully retrieved provider data for ID: {}", dto.getProviderId());
                 } catch (Exception e) {
                     log.debug("Could not fetch provider data by ID for enrichment: {}", e.getMessage());
                 }
             }
 
-            // Try to get property data
             PropertyDto propertyDto = null;
             if (dto.getPropertyId() != null) {
                 try {
@@ -854,8 +1000,7 @@ public class AppointmentServiceImpl implements AppointmentService {
                 }
             }
 
-            // Enrich the DTO with available data
-            enrichAppointmentDto(dto, userDto, propertyDto);
+            enrichAppointmentDto(dto, requesterDto, providerDto, propertyDto);
 
         } catch (Exception e) {
             log.warn("Error during safe enrichment of appointment DTO: {}", e.getMessage());
@@ -864,17 +1009,22 @@ public class AppointmentServiceImpl implements AppointmentService {
 
     private void enrichAppointmentDtoWithFullDetails(AppointmentDto dto) {
         try {
-            // Get property details
             PropertyDto propertyDto = null;
             if (dto.getPropertyId() != null) {
                 propertyDto = validateAndGetProperty(Long.valueOf(String.valueOf(dto.getPropertyId())));
             }
 
-            // For user details, we'd need the username or a getUserById method
-            // For now, we'll skip user enrichment in bulk operations
-            UserDto userDto = null;
+            UserDto requesterDto = null;
+            if (dto.getRequesterId() != null) {
+                requesterDto = validateAndGetUserById(Long.valueOf(String.valueOf(dto.getRequesterId())));
+            }
 
-            enrichAppointmentDto(dto, userDto, propertyDto);
+            UserDto providerDto = null;
+            if (dto.getProviderId() != null) {
+                providerDto = validateAndGetUserById(Long.valueOf(String.valueOf(dto.getProviderId())));
+            }
+
+            enrichAppointmentDto(dto, requesterDto, providerDto, propertyDto);
 
         } catch (Exception e) {
             log.warn("Error enriching appointment {} with full details: {}", dto.getId(), e.getMessage());
@@ -898,7 +1048,7 @@ public class AppointmentServiceImpl implements AppointmentService {
         dto.setDurationMinutes(durationMinutes);
         dto.setProviderId(Long.valueOf(providerId));
         dto.setEndDateTime(slot.plusMinutes(durationMinutes));
-        dto.setStatus(AppointmentStatus.PENDING); // Available slot
+        dto.setStatus(AppointmentStatus.PENDING);
         return dto;
     }
 
@@ -907,10 +1057,9 @@ public class AppointmentServiceImpl implements AppointmentService {
                                                        Integer durationMinutes) {
         List<LocalDateTime> availableSlots = new ArrayList<>();
 
-        // Business hours configuration
-        LocalDateTime startTime = date.atTime(9, 0);  // 9:00 AM
-        LocalDateTime endTime = date.atTime(17, 0);   // 5:00 PM
-        int slotIntervalMinutes = 30; // 30-minute intervals
+        LocalDateTime startTime = date.atTime(9, 0);
+        LocalDateTime endTime = date.atTime(17, 0);
+        int slotIntervalMinutes = 30;
 
         LocalDateTime currentSlot = startTime;
 
@@ -920,9 +1069,7 @@ public class AppointmentServiceImpl implements AppointmentService {
             LocalDateTime slotEndTime = currentSlot.plusMinutes(durationMinutes);
             boolean isAvailable = true;
 
-            // Check if this slot conflicts with any existing appointment
             for (AppointmentEntity appointment : existingAppointments) {
-                // Skip cancelled appointments
                 if (appointment.getStatus() == AppointmentStatus.CANCELLED) {
                     continue;
                 }
@@ -930,8 +1077,6 @@ public class AppointmentServiceImpl implements AppointmentService {
                 LocalDateTime appointmentEnd = appointment.getAppointmentDateTime()
                         .plusMinutes(appointment.getDurationMinutes());
 
-                // Check for overlap: slots overlap if they don't end before the appointment starts
-                // and don't start after the appointment ends
                 if (!(slotEndTime.isBefore(appointment.getAppointmentDateTime()) ||
                         currentSlot.isAfter(appointmentEnd))) {
                     isAvailable = false;
@@ -947,5 +1092,50 @@ public class AppointmentServiceImpl implements AppointmentService {
         }
 
         return availableSlots;
+    }
+
+    // ✅ NEW HELPER METHOD: Create AppointmentEvent from AppointmentDto
+    private AppointmentEvent createAppointmentEvent(AppointmentDto dto, String eventType) {
+        return AppointmentEvent.builder()
+                .eventType(eventType)
+                .eventTimestamp(LocalDateTime.now())
+                .eventId(UUID.randomUUID().toString())
+                .appointmentId(dto.getId())
+                .appointmentTitle(dto.getAppointmentTitle())
+                .description(dto.getDescription())
+                .appointmentDateTime(dto.getAppointmentDateTime())
+                .durationMinutes(dto.getDurationMinutes())
+                .status(dto.getStatus() != null ? dto.getStatus().toString() : null)
+                .type(dto.getType() != null ? dto.getType().toString() : null)
+                .location(dto.getLocation())
+                .meetingLink(dto.getMeetingLink())
+                .notes(dto.getNotes())
+                .requesterId(dto.getRequesterId())
+                .requesterUsername(dto.getRequesterUsername())
+                .requesterName(dto.getRequesterName())
+                .requesterEmail(dto.getRequesterEmail())
+                .requesterPhone(dto.getRequesterPhone())
+                .requesterFirstName(dto.getRequesterFirstName())
+                .requesterLastName(dto.getRequesterLastName())
+                .requesterProfileImage(dto.getRequesterProfileImage())
+                .providerId(dto.getProviderId())
+                .providerUsername(dto.getProviderUsername())
+                .providerName(dto.getProviderName())
+                .providerEmail(dto.getProviderEmail())
+                .providerPhone(dto.getProviderPhone())
+                .providerFirstName(dto.getProviderFirstName())
+                .providerLastName(dto.getProviderLastName())
+                .providerProfileImage(dto.getProviderProfileImage())
+                .propertyId(dto.getPropertyId())
+                .propertyTitle(dto.getPropertyTitle())
+                .propertyAddress(dto.getPropertyAddress())
+                .propertyIsRented(dto.getPropertyIsRented())
+                .propertyImage(dto.getPropertyImage())
+                .propertyImage2(dto.getPropertyImage2())
+                .propertyImage3(dto.getPropertyImage3())
+                .propertyImage4(dto.getPropertyImage4())
+                .propertyRentAmount(dto.getPropertyRentAmount())
+                .propertyDescription(dto.getPropertyDescription())
+                .build();
     }
 }
