@@ -13,7 +13,7 @@ env:
 
 jobs:
   # ==========================================
-  # Job 1: Build & Test
+  # Job 1: Build & Test (Unit Tests Only)
   # ==========================================
   build-and-test:
     name: Build & Test
@@ -41,8 +41,8 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Build and Test
-        run: ./gradlew clean build test --no-daemon
+      - name: Build and Test (Unit Tests Only)
+        run: ./gradlew clean build test --no-daemon --exclude-task integrationTest
         env:
           SPRING_PROFILES_ACTIVE: test
 
@@ -118,7 +118,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SPRING_PROFILES_ACTIVE: test
-        run: ./gradlew build jacocoTestReport sonar --info --no-daemon
+        run: ./gradlew build jacocoTestReport sonar --info --no-daemon --exclude-task integrationTest
         continue-on-error: true
 
   # ==========================================
@@ -172,10 +172,10 @@ jobs:
           retention-days: 1
 
   # ==========================================
-  # Job 4: K6 Performance Tests
+  # Job 4: Integration & Performance Tests
   # ==========================================
-  performance-tests:
-    name: K6 Performance Tests
+  integration-and-performance-tests:
+    name: Integration & Performance Tests
     runs-on: ubuntu-latest
     needs: docker-build
     if: github.ref == 'refs/heads/main'
@@ -480,7 +480,7 @@ jobs:
   docker-push:
     name: Push to Docker Hub
     runs-on: ubuntu-latest
-    needs: [docker-build, performance-tests]
+    needs: [docker-build, integration-and-performance-tests]
     if: github.ref == 'refs/heads/main'
 
     steps:
