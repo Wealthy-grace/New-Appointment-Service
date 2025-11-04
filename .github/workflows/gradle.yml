@@ -38,18 +38,11 @@ jobs:
         image: quay.io/keycloak/keycloak:23.0
         ports:
           - 8090:8080
-        env:
-          KEYCLOAK_ADMIN: admin
-          KEYCLOAK_ADMIN_PASSWORD: admin123
-          KC_HTTP_RELATIVE_PATH: /
         options: >-
-          --health-cmd "curl -f http://localhost:8080/health/ready || exit 1"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-        credentials:
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          -e KEYCLOAK_ADMIN=admin
+          -e KEYCLOAK_ADMIN_PASSWORD=admin123
+          -e KC_HTTP_RELATIVE_PATH=/
+          -e KC_HEALTH_ENABLED=true
 
     steps:
       - name: Checkout Code
@@ -84,9 +77,9 @@ jobs:
           echo "RabbitMQ is ready!"
           
           echo "Waiting for Keycloak..."
-          timeout 180 bash -c 'until curl -sf http://localhost:8090/health/ready > /dev/null 2>&1; do sleep 5; done'
+          timeout 240 bash -c 'until curl -sf http://localhost:8090/health/ready > /dev/null 2>&1; do echo "Waiting..."; sleep 5; done'
           echo "Keycloak is ready!"
-          sleep 5
+          sleep 10
 
       - name: Build and Test with Gradle
         run: ./gradlew clean build test --no-daemon
@@ -267,7 +260,7 @@ jobs:
       - name: Wait for Keycloak
         run: |
           echo "Waiting for Keycloak..."
-          timeout 240 bash -c 'until curl -sf http://localhost:8090/health/ready > /dev/null 2>&1; do echo "Retrying..."; sleep 5; done'
+          timeout 300 bash -c 'until curl -sf http://localhost:8090/health/ready > /dev/null 2>&1; do echo "Waiting for Keycloak to start..."; sleep 5; done'
           echo "Keycloak ready!"
           sleep 10
 
