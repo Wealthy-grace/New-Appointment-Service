@@ -231,7 +231,7 @@ jobs:
   # Job 4: Integration & K6 Performance Tests
   # ==========================================
   integration-and-k6performance-tests:
-    name: Integration & k6Performance Tests
+    name: Integration & K6 Performance Tests
     runs-on: ubuntu-latest
     needs: docker-build
     if: github.ref == 'refs/heads/main'
