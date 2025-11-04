@@ -5,6 +5,7 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  workflow_dispatch:
 
 env:
   JAVA_VERSION: '17'
@@ -12,8 +13,9 @@ env:
 
 jobs:
   build-and-test:
-    name: Build & Test
+    name: Build and Test
     runs-on: ubuntu-latest
+
     services:
       mongodb:
         image: mongo:7.0
@@ -32,17 +34,14 @@ jobs:
         image: quay.io/keycloak/keycloak:23.0
         ports:
           - 8090:8080
-        options: >-
-          -e KEYCLOAK_ADMIN=admin
-          -e KEYCLOAK_ADMIN_PASSWORD=admin123
-          -e KC_DB=dev-mem
-          --health-cmd "curl -f http://localhost:8080/realms/master/.well-known/openid-configuration || exit 1"
-          --health-interval 15s
-          --health-timeout 10s
-          --health-retries 10
+        environment:
+          KEYCLOAK_ADMIN: admin
+          KEYCLOAK_ADMIN_PASSWORD: admin123
+          KC_DB: dev-mem
+        # REMOVED internal health-check command here
 
     steps:
-      - name: Checkout code
+      - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Set up JDK 17 (Zulu)
@@ -63,18 +62,23 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Wait for MongoDB to be ready
+      - name: Wait for MongoDB readiness
         run: |
           echo "Waiting for MongoDB..."
           for i in {1..15}; do
-            nc -z localhost 27017 && echo "MongoDB is up" && exit 0
+            nc -z localhost 27017 && echo "MongoDB is ready!" && exit 0
             sleep 4
           done
-          echo "MongoDB not up after 60 seconds"
+          echo "Timeout waiting for MongoDB"
           exit 1
 
+      - name: Wait for Keycloak readiness
+        run: |
+          echo "Waiting for Keycloak..."
+          timeout 180 bash -c 'until curl -s -f http://localhost:8090/realms/master/.well-known/openid-configuration; do sleep 5; done'
+          echo "Keycloak is ready!"
+
       - name: Build and Test with Gradle
-        run: ./gradlew clean build test --no-daemon
         env:
           SPRING_PROFILES_ACTIVE: test
           SPRING_DATA_MONGODB_URI: mongodb://localhost:27017/appointment-service
@@ -82,6 +86,7 @@ jobs:
           SPRING_RABBITMQ_PORT: 5672
           SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://localhost:8090/realms/master
           SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://localhost:8090/realms/master/protocol/openid-connect/certs
+        run: ./gradlew clean build test --no-daemon
 
       - name: Upload Test Results
         if: always()
@@ -103,7 +108,7 @@ jobs:
           path: build/reports/jacoco/test/
           retention-days: 7
 
-      - name: Upload JAR artifact
+      - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
         with:
           name: appointment-service-jar
@@ -117,7 +122,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
-      - name: Checkout code
+      - name: Checkout Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -160,7 +165,7 @@ jobs:
     needs: sonarcloud
 
     steps:
-      - name: Checkout code
+      - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Download JAR artifact
@@ -171,29 +176,27 @@ jobs:
 
       - name: Verify JAR file
         run: |
-          echo "Contents of build/libs/:"
+          echo "Checking JAR contents..."
           ls -lh build/libs/
           if ! ls build/libs/*.jar > /dev/null; then
-            echo "❌ JAR file not found!"
+            echo "ERROR: JAR file missing"
             exit 1
           fi
 
-      - name: Set up Docker Buildx
+      - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build Docker image
+      - name: Build Docker Image
         run: docker build -t appointment-service:test .
 
-      - name: Test Docker image
-        run: |
-          echo "Testing Docker image..."
-          docker images | grep appointment-service || exit 1
+      - name: Test Docker Image
+        run: docker images | grep appointment-service
 
-      - name: Save Docker image
+      - name: Save Docker Image
         if: github.ref == 'refs/heads/main'
         run: docker save appointment-service:test | gzip > appointment-service-image.tar.gz
 
-      - name: Upload Docker image artifact
+      - name: Upload Docker Image Artifact
         if: github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
@@ -208,18 +211,18 @@ jobs:
     if: github.ref == 'refs/heads/main'
 
     steps:
-      - name: Checkout code
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Download Docker image
+      - name: Download Docker Image
         uses: actions/download-artifact@v4
         with:
           name: appointment-service-image
 
-      - name: Load Docker image
+      - name: Load Docker Image
         run: docker load < appointment-service-image.tar.gz
 
-      - name: Create Docker network
+      - name: Create Docker Network
         run: docker network create shared-microservices-network || true
 
       - name: Start MongoDB
@@ -249,7 +252,7 @@ jobs:
       - name: Wait for Keycloak
         run: |
           echo "Waiting for Keycloak..."
-          timeout 180 bash -c 'until curl -s http://localhost:8090/realms/master/.well-known/openid-configuration > /dev/null; do sleep 5; done'
+          timeout 180 bash -c 'until curl -s -f http://localhost:8090/realms/master/.well-known/openid-configuration > /dev/null; do sleep 5; done'
           echo "Keycloak ready!"
           sleep 10
 
@@ -378,7 +381,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
 
     steps:
-      - name: Checkout code
+      - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Download JAR artifact
