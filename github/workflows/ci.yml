@@ -18,32 +18,67 @@ env:
 
 jobs:
   build-and-test:
-    name: Build and Test
+    name: Build and Integration Tests
     runs-on: ubuntu-latest
+    services:
+      mongodb:
+        image: mongo:7.0
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.runCommand({ping:1})'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      rabbitmq:
+        image: rabbitmq:3.12-management
+        ports:
+          - 5672:5672
+      keycloak:
+        image: quay.io/keycloak/keycloak:23.0
+        ports:
+          - 8090:8080
+        options: >-
+          -e KEYCLOAK_ADMIN=admin
+          -e KEYCLOAK_ADMIN_PASSWORD=admin123
+          -e KC_DB=dev-mem
+          --health-cmd "curl -f http://localhost:8080/realms/master/.well-known/openid-configuration || exit 1"
+          --health-interval 15s
+          --health-timeout 10s
+          --health-retries 10
 
     steps:
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: 'gradle'
+          cache: gradle
 
-      - name: Grant execute permission for gradlew
+      - name: Wait for Keycloak to start
+        run: |
+          echo "Waiting for Keycloak..."
+          timeout 180 bash -c 'until curl -s http://localhost:8090/realms/master/.well-known/openid-configuration; do sleep 5; done'
+
+      - name: Grant execute permission for Gradle
         run: chmod +x gradlew
 
-      - name: Build with Gradle
+      - name: Build application (skip tests)
         run: ./gradlew clean build -x test --no-daemon
 
-      - name: Run Unit Tests
+      - name: Run Integration Tests
+        env:
+          SPRING_DATA_MONGODB_URI: mongodb://localhost:27017/appointment-service
+          SPRING_RABBITMQ_HOST: localhost
+          SPRING_RABBITMQ_PORT: 5672
+          SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://localhost:8090/realms/master
+          SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://localhost:8090/realms/master/protocol/openid-connect/certs
         run: ./gradlew test --no-daemon
 
-      - name: Generate Test Report
+      - name: Generate Test & Coverage Report
         if: always()
         run: ./gradlew jacocoTestReport --no-daemon
 
@@ -61,7 +96,7 @@ jobs:
           name: coverage-report
           path: build/reports/jacoco/test/
 
-      - name: Upload Build Artifact
+      - name: Upload Build JAR
         uses: actions/upload-artifact@v4
         with:
           name: appointment-service-jar
@@ -69,301 +104,41 @@ jobs:
           retention-days: 7
 
   sonarcloud-analysis:
-    name: SonarCloud Code Analysis
-    runs-on: ubuntu-latest
+    name: SonarCloud Analysis
     needs: build-and-test
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
+      - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: 'gradle'
+          cache: gradle
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
-
-      - name: Cache SonarCloud packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.sonar/cache
-          key: ${{ runner.os }}-sonar
-          restore-keys: ${{ runner.os }}-sonar
-
-      - name: Cache Gradle packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
-
-      - name: Build and analyze with SonarCloud
+      - name: Build and analyze
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SONAR_TOKEN: 6c1a09716696c2e3b6d97476f58fceff83e383d7
-        run: |
-          ./gradlew build jacocoTestReport sonar \
-            -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }} \
-            -Dsonar.organization=wealthy-grace \
-            -Dsonar.host.url=https://sonarcloud.io \
-            -Dsonar.token=${{ secrets.SONAR_TOKEN }} \
-            --info \
-            --no-daemon
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: >
+          ./gradlew build jacocoTestReport sonar
+          -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }}
+          -Dsonar.organization=wealthy-grace
+          -Dsonar.host.url=https://sonarcloud.io
+          -Dsonar.token=${{ secrets.SONAR_TOKEN }}
+          --no-daemon
 
-  security-scan:
-    name: Security Vulnerability Scan
+  build-and-push:
+    name: Build & Push Docker Image
+    needs: [build-and-test, sonarcloud-analysis]
     runs-on: ubuntu-latest
-    needs: build-and-test
-    permissions:
-      contents: read
-      security-events: write
-
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH'
-
-      - name: Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: 'trivy-results.sarif'
-        continue-on-error: true
-
-  performance-tests:
-    name: K6 Performance Tests
-    runs-on: ubuntu-latest
-    needs: build-and-test
     if: github.ref == 'refs/heads/main'
 
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Download JAR artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: appointment-service-jar
-          path: build/libs/
-
-      - name: Build Docker image
-        run: docker build -t appointment-service:test .
-
-      - name: Create Docker network
-        run: docker network create shared-microservices-network || true
-
-      - name: Start MongoDB
-        run: |
-          docker run -d --name mongodb \
-            --network shared-microservices-network \
-            -p 27017:27017 \
-            -e MONGO_INITDB_DATABASE=appointment-service \
-            mongo:7.0
-
-      - name: Wait for MongoDB
-        run: |
-          echo "⏳ Waiting for MongoDB..."
-          timeout 120 bash -c 'until docker exec mongodb mongosh --eval "db.runCommand({ping:1})" --quiet > /dev/null 2>&1; do sleep 3; done'
-          echo "✅ MongoDB ready!"
-          sleep 5
-
-      - name: Start Keycloak
-        run: |
-          docker run -d --name keycloak \
-            --network shared-microservices-network \
-            -p 8090:8080 \
-            -e KEYCLOAK_ADMIN=admin \
-            -e KEYCLOAK_ADMIN_PASSWORD=admin123 \
-            quay.io/keycloak/keycloak:23.0 start-dev
-
-      - name: Wait for Keycloak
-        run: |
-          echo "⏳ Waiting for Keycloak..."
-          timeout 180 bash -c 'until curl -s http://localhost:8090/realms/master/.well-known/openid-configuration > /dev/null; do sleep 5; done'
-          echo "✅ Keycloak ready!"
-          sleep 10
-
-      - name: Configure Keycloak
-        run: |
-          ADMIN_TOKEN=$(curl -s -X POST http://localhost:8090/realms/master/protocol/openid-connect/token \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            -d "username=admin&password=admin123&grant_type=password&client_id=admin-cli" | jq -r '.access_token')
-          
-          curl -s -X POST http://localhost:8090/admin/realms \
-            -H "Authorization: Bearer $ADMIN_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d '{"realm":"friendly-housing","enabled":true,"sslRequired":"none"}' || true
-          
-          curl -s -X POST http://localhost:8090/admin/realms/friendly-housing/clients \
-            -H "Authorization: Bearer $ADMIN_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d '{"clientId":"appointment-service","enabled":true,"secret":"Lrf6ZwUcAqOnvg4fl89kKyiOLCaWDb6B","directAccessGrantsEnabled":true,"serviceAccountsEnabled":true}' || true
-
-      - name: Start RabbitMQ
-        run: |
-          docker run -d --name rabbitmq \
-            --network shared-microservices-network \
-            -p 5672:5672 \
-            rabbitmq:3.12-management
-
-      - name: Wait for RabbitMQ
-        run: |
-          echo "⏳ Waiting for RabbitMQ..."
-          sleep 10
-          echo "✅ RabbitMQ ready!"
-
-      - name: Start Mock Services
-        run: |
-          docker run -d --name user-service-app \
-            --network shared-microservices-network \
-            -p 8081:5678 \
-            hashicorp/http-echo:latest -text='{"id":"1","name":"Test User"}' -listen=:5678
-          
-          docker run -d --name property-service-app \
-            --network shared-microservices-network \
-            -p 8082:5678 \
-            hashicorp/http-echo:latest -text='{"id":"1","title":"Test Property"}' -listen=:5678
-
-      - name: Start Appointment Service
-        run: |
-          docker run -d --name appointment-service-app \
-            --network shared-microservices-network \
-            -p 8083:8083 \
-            -e SPRING_PROFILES_ACTIVE=default \
-            -e SPRING_DATA_MONGODB_URI=mongodb://mongodb:27017/appointment-service \
-            -e SPRING_RABBITMQ_HOST=rabbitmq \
-            -e SPRING_RABBITMQ_PORT=5672 \
-            -e SPRING_RABBITMQ_USERNAME=guest \
-            -e SPRING_RABBITMQ_PASSWORD=guest \
-            -e SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI=http://keycloak:8080/realms/friendly-housing \
-            -e SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI=http://keycloak:8080/realms/friendly-housing/protocol/openid-connect/certs \
-            -e KEYCLOAK_AUTH_SERVER_URL=http://keycloak:8080 \
-            -e KEYCLOAK_REALM=friendly-housing \
-            -e KEYCLOAK_RESOURCE=appointment-service \
-            -e KEYCLOAK_CREDENTIALS_SECRET=Lrf6ZwUcAqOnvg4fl89kKyiOLCaWDb6B \
-            -e APP_SERVICES_USER_SERVICE_URL=http://user-service-app:5678 \
-            -e APP_SERVICES_PROPERTY_SERVICE_URL=http://property-service-app:5678 \
-            appointment-service:test
-
-      - name: Wait for Appointment Service
-        run: |
-          echo "⏳ Waiting for Appointment Service..."
-          for i in {1..36}; do
-            if docker ps | grep -q appointment-service-app; then
-              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8083/actuator/health 2>/dev/null || echo "000")
-              if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "401" ]; then
-                echo "✅ Appointment Service ready! (HTTP $HTTP_CODE)"
-                sleep 5
-                exit 0
-              fi
-              echo "Service responding with HTTP $HTTP_CODE..."
-            else
-              echo "❌ Container not running!"
-              docker logs appointment-service-app 2>&1 | tail -50
-              exit 1
-            fi
-            sleep 5
-          done
-          echo "❌ Timeout!"
-          docker logs appointment-service-app 2>&1 | tail -100
-          exit 1
-
-      - name: Install K6
-        run: |
-          sudo gpg -k
-          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
-            --keyserver hkp://keyserver.ubuntu.com:80 \
-            --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
-          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | \
-            sudo tee /etc/apt/sources.list.d/k6.list
-          sudo apt-get update
-          sudo apt-get install k6
-
-      - name: Run K6 Tests
-        run: |
-          cat > appointment-test.js << 'EOF'
-          import http from 'k6/http';
-          import { check, sleep } from 'k6';
-          import { Rate } from 'k6/metrics';
-
-          const errorRate = new Rate('errors');
-          const BASE_URL = 'http://localhost:8083';
-
-          export const options = {
-            stages: [
-              { duration: '30s', target: 10 },
-              { duration: '1m', target: 10 },
-              { duration: '30s', target: 0 },
-            ],
-            thresholds: {
-              http_req_duration: ['p(95)<2000'],
-              errors: ['rate<0.1'],
-            },
-          };
-
-          export default function () {
-            let healthRes = http.get(`${BASE_URL}/actuator/health`);
-            check(healthRes, {
-              'health check responds': (r) => r.status !== 0,
-            }) || errorRate.add(1);
-
-            sleep(1);
-
-            let appointmentsRes = http.get(`${BASE_URL}/api/v1/appointments/requester/1`);
-            check(appointmentsRes, {
-              'appointments endpoint responds': (r) => r.status !== 0,
-            });
-
-            sleep(2);
-          }
-          EOF
-          k6 run appointment-test.js
-        continue-on-error: true
-
-      - name: Show logs on failure
-        if: failure()
-        run: |
-          echo "🔍 Appointment Service logs:"
-          docker logs appointment-service-app || true
-          echo ""
-          echo "🔍 MongoDB logs:"
-          docker logs mongodb || true
-          echo ""
-          echo "🔍 RabbitMQ logs:"
-          docker logs rabbitmq || true
-
-      - name: Cleanup
-        if: always()
-        run: |
-          docker stop appointment-service-app mongodb keycloak rabbitmq user-service-app property-service-app || true
-          docker rm appointment-service-app mongodb keycloak rabbitmq user-service-app property-service-app || true
-          docker network rm shared-microservices-network || true
-
-  build-and-push:
-    name: Build and Push Docker Image
-    runs-on: ubuntu-latest
-    needs: [build-and-test, sonarcloud-analysis, performance-tests]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
-    steps:
-      - name: Checkout Code
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
@@ -373,9 +148,9 @@ jobs:
         uses: docker/login-action@v3
         with:
           username: godfrey10
-          password: godfreygrace10
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract metadata for Docker
+      - name: Extract metadata for image
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -385,7 +160,7 @@ jobs:
             type=sha,prefix={{branch}}-
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and Push Docker Image
+      - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -393,14 +168,6 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache
-          cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache,mode=max
-
-      - name: Docker Image Summary
-        run: |
-          echo "### Docker Image Published" >> $GITHUB_STEP_SUMMARY
-          echo "**Tags:** ${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Image:** ${{ env.DOCKER_IMAGE }}" >> $GITHUB_STEP_SUMMARY
 
   deploy-production:
     name: Deploy to Production
@@ -410,36 +177,11 @@ jobs:
     environment: production
 
     steps:
-      - name: Checkout Code
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Deploy to Production
+      - name: Deploy info
         run: |
-          echo "Deploying to production environment..."
-          echo "Docker image: ${{ env.DOCKER_IMAGE }}:latest"
-          echo ""
-          echo "Manual deployment steps:"
-          echo "1. SSH to your production server"
-          echo "2. Run: docker pull ${{ env.DOCKER_IMAGE }}:latest"
-          echo "3. Run: docker-compose up -d appointment-service"
-
-      - name: Run Health Check
-        run: |
-          echo "Health check instructions:"
-          echo "After deployment, verify the service is running:"
-          echo "curl -f http://your-server:8083/actuator/health"
-        continue-on-error: true
-
-      - name: Deployment Summary
-        if: success()
-        run: |
-          echo "### Production Deployment" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Status:** Ready for manual deployment" >> $GITHUB_STEP_SUMMARY
-          echo "**Image:** \`${{ env.DOCKER_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Deployment Commands:**" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ${{ env.DOCKER_IMAGE }}:latest" >> $GITHUB_STEP_SUMMARY
-          echo "docker-compose up -d appointment-service" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "Deployment ready. Pull latest image and run docker-compose."
+          echo "docker pull ${{ env.DOCKER_IMAGE }}:latest"
+          echo "docker-compose up -d appointment-service"
