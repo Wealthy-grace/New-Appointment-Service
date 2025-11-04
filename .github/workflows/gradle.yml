@@ -9,17 +9,40 @@ on:
 
 permissions:
   contents: read
+  actions: read
+  checks: write
+  pull-requests: write
   security-events: write
-  pull-requests: read
+  statuses: write
 
 env:
-  DOCKER_IMAGE: godfrey10/appointment-service
+  JAVA_VERSION: '17'
+  JAVA_DISTRIBUTION: 'temurin'
+  DOCKER_IMAGE_NAME: godfrey10/appointment-service
   SONAR_PROJECT_KEY: Wealthy-grace_New-Appointment-Service
 
 jobs:
+  # -----------------------------
+  # 1. Build and Test
+  # -----------------------------
   build-and-test:
-    name: Build and Test
+    name: Run Tests and Code Analysis
     runs-on: ubuntu-latest
+
+    services:
+      mongodb:
+        image: mongo:7.0
+        env:
+          MONGO_INITDB_ROOT_USERNAME: admin
+          MONGO_INITDB_ROOT_PASSWORD: admin123
+          MONGO_INITDB_DATABASE: appointment-service
+        options: >-
+          --health-cmd "mongosh --eval 'db.runCommand({ping: 1})'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 27017:27017
 
     steps:
       - name: Checkout Code
@@ -27,51 +50,71 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up JDK 17
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
-          distribution: 'temurin'
-          cache: 'gradle'
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          cache: gradle
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
 
       - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
+        run: chmod +x ./gradlew
 
-      - name: Build with Gradle
-        run: ./gradlew clean build -x test --no-daemon
+      - name: Run Tests with Coverage
+        run: ./gradlew clean test jacocoTestReport --no-daemon --continue
+        env:
+          SPRING_DATA_MONGODB_URI: mongodb://admin:admin123@localhost:27017/appointment-service?authSource=admin
+          SPRING_DATA_MONGODB_DATABASE: appointment-service
+          SPRING_PROFILES_ACTIVE: test
 
-      - name: Run Unit Tests
-        run: ./gradlew test --no-daemon
+      - name: Build application
+        run: ./gradlew bootJar -x test --no-daemon
 
-      - name: Generate Test Report
-        if: always()
-        run: ./gradlew jacocoTestReport --no-daemon
-
-      - name: Upload Test Results
-        if: always()
+      - name: Upload test results
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: test-results
-          path: build/test-results/test/
+          path: |
+            build/test-results/test/
+            build/reports/jacoco/test/
+            build/reports/tests/test/
+          retention-days: 7
 
-      - name: Upload Coverage Report
-        if: always()
+      - name: Publish Test Results
+        uses: dorny/test-reporter@v1
+        if: success() || failure()
+        with:
+          name: Gradle Tests
+          path: build/test-results/test/*.xml
+          reporter: java-junit
+          fail-on-error: false
+
+      - name: Upload JAR artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-report
-          path: build/reports/jacoco/test/
-
-      - name: Upload Build Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: appointment-service-jar
+          name: jar-artifacts
           path: build/libs/*.jar
           retention-days: 7
 
-  sonarcloud-analysis:
+  # -----------------------------
+  # 2. SonarCloud Analysis
+  # -----------------------------
+  code-quality-sonarqube:
     name: SonarCloud Code Analysis
     runs-on: ubuntu-latest
     needs: build-and-test
+    if: github.actor != 'dependabot[bot]'
 
     steps:
       - name: Checkout Code
@@ -79,15 +122,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up JDK 17
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
-          distribution: 'temurin'
-          cache: 'gradle'
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          cache: gradle
 
       - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
+        run: chmod +x ./gradlew
 
       - name: Cache SonarCloud packages
         uses: actions/cache@v4
@@ -109,22 +152,24 @@ jobs:
       - name: Build and analyze with SonarCloud
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SONAR_TOKEN: 6c1a09716696c2e3b6d97476f58fceff83e383d7
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
           ./gradlew build jacocoTestReport sonar \
             -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }} \
             -Dsonar.organization=wealthy-grace \
             -Dsonar.host.url=https://sonarcloud.io \
-            -Dsonar.token=${{ secrets.SONAR_TOKEN }} \
             --info \
             --no-daemon
+        continue-on-error: true
 
+  # -----------------------------
+  # 3. Security Scanning
+  # -----------------------------
   security-scan:
-    name: Security Vulnerability Scan
+    name: Security Scan
     runs-on: ubuntu-latest
     needs: build-and-test
     permissions:
-      contents: read
       security-events: write
 
     steps:
@@ -138,15 +183,14 @@ jobs:
           scan-ref: '.'
           format: 'sarif'
           output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH'
 
-      - name: Upload Trivy results to GitHub Security
+      - name: Upload Trivy scan results
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: 'trivy-results.sarif'
-        continue-on-error: true
 
+<<<<<<< HEAD
   performance-tests:
     name: K6 Performance Tests
     runs-on: ubuntu-latest
@@ -361,10 +405,43 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-and-test, sonarcloud-analysis, performance-tests]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+=======
+  # -----------------------------
+  # 4. Docker Build & Push
+  # -----------------------------
+  build-docker:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    needs: [build-and-test, code-quality-sonarqube]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+>>>>>>> 777a64ab5f863d0426a2c5dec21d95f894228851
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          cache: gradle
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
+      - name: Build Application
+        run: ./gradlew build -x test
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -372,40 +449,61 @@ jobs:
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
-          username: godfrey10
-          password: godfreygrace10
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Extract metadata for Docker
+      - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.DOCKER_IMAGE }}
+          images: ${{ env.DOCKER_IMAGE_NAME }}
           tags: |
             type=ref,event=branch
+            type=ref,event=pr
             type=sha,prefix={{branch}}-
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and Push Docker Image
+      - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache
-          cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache,mode=max
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Docker Image Summary
+  # -----------------------------
+  # 5. Deploy to Staging
+  # -----------------------------
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: build-docker
+    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'
+    environment: staging
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Deploy to Staging
         run: |
-          echo "### Docker Image Published" >> $GITHUB_STEP_SUMMARY
-          echo "**Tags:** ${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Image:** ${{ env.DOCKER_IMAGE }}" >> $GITHUB_STEP_SUMMARY
+          echo "Deploying to staging environment..."
+          # Add your staging deployment commands here
 
+      - name: Run Health Check
+        run: |
+          echo "Running health check..."
+          # Add health check commands here
+
+  # -----------------------------
+  # 6. Deploy to Production
+  # -----------------------------
   deploy-production:
     name: Deploy to Production
     runs-on: ubuntu-latest
-    needs: build-and-push
+    needs: build-docker
     if: github.ref == 'refs/heads/main'
     environment: production
 
@@ -416,30 +514,15 @@ jobs:
       - name: Deploy to Production
         run: |
           echo "Deploying to production environment..."
-          echo "Docker image: ${{ env.DOCKER_IMAGE }}:latest"
-          echo ""
-          echo "Manual deployment steps:"
-          echo "1. SSH to your production server"
-          echo "2. Run: docker pull ${{ env.DOCKER_IMAGE }}:latest"
-          echo "3. Run: docker-compose up -d appointment-service"
+          # Add your production deployment commands here
 
       - name: Run Health Check
         run: |
-          echo "Health check instructions:"
-          echo "After deployment, verify the service is running:"
-          echo "curl -f http://your-server:8083/actuator/health"
-        continue-on-error: true
+          echo "Running health check..."
+          # Add health check commands here
 
-      - name: Deployment Summary
+      - name: Notify Deployment Success
         if: success()
         run: |
-          echo "### Production Deployment" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Status:** Ready for manual deployment" >> $GITHUB_STEP_SUMMARY
-          echo "**Image:** \`${{ env.DOCKER_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Deployment Commands:**" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ${{ env.DOCKER_IMAGE }}:latest" >> $GITHUB_STEP_SUMMARY
-          echo "docker-compose up -d appointment-service" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Production deployment successful!"
+          # Add notification logic here
