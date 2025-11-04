@@ -228,10 +228,10 @@ jobs:
           retention-days: 1
 
   # ==========================================
-  # Job 4: Integration & Performance Tests
+  # Job 4: Integration & K6 Performance Tests
   # ==========================================
-  integration-and-performance-tests:
-    name: Integration & Performance Tests
+  integration-and-k6performance-tests:
+    name: Integration & k6Performance Tests
     runs-on: ubuntu-latest
     needs: docker-build
     if: github.ref == 'refs/heads/main'
