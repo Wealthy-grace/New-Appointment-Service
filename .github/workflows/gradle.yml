@@ -29,14 +29,27 @@ jobs:
         image: rabbitmq:3.12-management
         ports:
           - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
       keycloak:
         image: quay.io/keycloak/keycloak:23.0
         ports:
           - 8090:8080
+        env:
+          KEYCLOAK_ADMIN: admin
+          KEYCLOAK_ADMIN_PASSWORD: admin123
+          KC_HTTP_RELATIVE_PATH: /
         options: >-
-          -e KEYCLOAK_ADMIN=admin
-          -e KEYCLOAK_ADMIN_PASSWORD=admin123
-          -e KC_DB=dev-mem
+          --health-cmd "curl -f http://localhost:8080/health/ready || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
       - name: Checkout Code
@@ -60,21 +73,20 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Wait for MongoDB
+      - name: Wait for Services
         run: |
           echo "Waiting for MongoDB..."
-          for i in {1..15}; do
-            nc -z localhost 27017 && echo "MongoDB is ready" && exit 0
-            sleep 4
-          done
-          echo "Timeout waiting for MongoDB"
-          exit 1
-
-      - name: Wait for Keycloak
-        run: |
+          timeout 60 bash -c 'until nc -z localhost 27017; do sleep 2; done'
+          echo "MongoDB is ready!"
+          
+          echo "Waiting for RabbitMQ..."
+          timeout 60 bash -c 'until nc -z localhost 5672; do sleep 2; done'
+          echo "RabbitMQ is ready!"
+          
           echo "Waiting for Keycloak..."
-          timeout 180 bash -c 'until curl -fsSL http://localhost:8090/realms/master/.well-known/openid-configuration; do sleep 5; done'
+          timeout 180 bash -c 'until curl -sf http://localhost:8090/health/ready > /dev/null 2>&1; do sleep 5; done'
           echo "Keycloak is ready!"
+          sleep 5
 
       - name: Build and Test with Gradle
         run: ./gradlew clean build test --no-daemon
@@ -160,7 +172,8 @@ jobs:
   docker-build:
     name: Build Docker Image
     runs-on: ubuntu-latest
-    needs: sonarcloud
+    needs: build-and-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
       - name: Checkout Code
@@ -176,7 +189,7 @@ jobs:
         run: |
           echo "Checking JAR contents..."
           ls -lh build/libs/
-          if ! ls build/libs/*.jar > /dev/null; then
+          if ! ls build/libs/*.jar 1> /dev/null 2>&1; then
             echo "ERROR: JAR file missing"
             exit 1
           fi
@@ -191,11 +204,9 @@ jobs:
         run: docker images | grep appointment-service
 
       - name: Save Docker Image
-        if: github.ref == 'refs/heads/main'
         run: docker save appointment-service:test | gzip > appointment-service-image.tar.gz
 
       - name: Upload Docker Image Artifact
-        if: github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
           name: appointment-service-image
@@ -229,14 +240,18 @@ jobs:
             --network shared-microservices-network \
             -p 27017:27017 \
             -e MONGO_INITDB_DATABASE=appointment-service \
+            --health-cmd="mongosh --eval 'db.runCommand({ping:1})' --quiet" \
+            --health-interval=5s \
+            --health-timeout=3s \
+            --health-retries=5 \
             mongo:7.0
 
       - name: Wait for MongoDB
         run: |
           echo "Waiting for MongoDB..."
-          timeout 120 bash -c 'until docker exec mongodb mongosh --eval "db.runCommand({ping:1})" --quiet > /dev/null 2>&1; do sleep 3; done'
+          timeout 90 bash -c 'until docker exec mongodb mongosh --eval "db.runCommand({ping:1})" --quiet > /dev/null 2>&1; do sleep 3; done'
           echo "MongoDB ready!"
-          sleep 5
+          sleep 3
 
       - name: Start Keycloak
         run: |
@@ -245,12 +260,14 @@ jobs:
             -p 8090:8080 \
             -e KEYCLOAK_ADMIN=admin \
             -e KEYCLOAK_ADMIN_PASSWORD=admin123 \
+            -e KC_HTTP_RELATIVE_PATH=/ \
+            -e KC_HEALTH_ENABLED=true \
             quay.io/keycloak/keycloak:23.0 start-dev
 
       - name: Wait for Keycloak
         run: |
           echo "Waiting for Keycloak..."
-          timeout 180 bash -c 'until curl -fsSL http://localhost:8090/realms/master/.well-known/openid-configuration; do sleep 5; done'
+          timeout 240 bash -c 'until curl -sf http://localhost:8090/health/ready > /dev/null 2>&1; do echo "Retrying..."; sleep 5; done'
           echo "Keycloak ready!"
           sleep 10
 
@@ -259,12 +276,19 @@ jobs:
           docker run -d --name rabbitmq \
             --network shared-microservices-network \
             -p 5672:5672 \
+            -p 15672:15672 \
+            --health-cmd="rabbitmq-diagnostics -q ping" \
+            --health-interval=5s \
+            --health-timeout=3s \
+            --health-retries=5 \
             rabbitmq:3.12-management
 
       - name: Wait for RabbitMQ
         run: |
-          sleep 10
+          echo "Waiting for RabbitMQ..."
+          timeout 60 bash -c 'until docker exec rabbitmq rabbitmq-diagnostics -q ping > /dev/null 2>&1; do sleep 3; done'
           echo "RabbitMQ ready!"
+          sleep 5
 
       - name: Start Appointment Service
         run: |
@@ -283,17 +307,18 @@ jobs:
       - name: Wait for Appointment Service
         run: |
           echo "Waiting for Appointment Service..."
-          for i in {1..36}; do
+          for i in {1..60}; do
             HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8083/actuator/health 2>/dev/null || echo "000")
             if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "401" ]; then
               echo "Appointment Service ready! (HTTP $HTTP_CODE)"
               sleep 5
               exit 0
             fi
-            echo "Service HTTP $HTTP_CODE, retrying..."
+            echo "Attempt $i/60: Service HTTP $HTTP_CODE, retrying in 5s..."
             sleep 5
           done
           echo "Timeout waiting for Appointment Service"
+          echo "=== Appointment Service Logs ==="
           docker logs appointment-service-app || true
           exit 1
 
@@ -352,16 +377,16 @@ jobs:
       - name: Show logs on failure
         if: failure()
         run: |
-          echo "Appointment Service logs:"
+          echo "=== Appointment Service logs ==="
           docker logs appointment-service-app || true
           echo ""
-          echo "MongoDB logs:"
+          echo "=== MongoDB logs ==="
           docker logs mongodb || true
           echo ""
-          echo "RabbitMQ logs:"
+          echo "=== RabbitMQ logs ==="
           docker logs rabbitmq || true
           echo ""
-          echo "Keycloak logs:"
+          echo "=== Keycloak logs ==="
           docker logs keycloak || true
 
       - name: Cleanup
@@ -391,7 +416,7 @@ jobs:
         run: |
           echo "Contents of build/libs/:"
           ls -lh build/libs/
-          if ! ls build/libs/*.jar > /dev/null; then
+          if ! ls build/libs/*.jar 1> /dev/null 2>&1; then
             echo "ERROR: JAR file not found!"
             exit 1
           fi
@@ -430,10 +455,13 @@ jobs:
           echo "### Docker Image Published 🐳" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Repository:** ${{ env.DOCKER_IMAGE }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Tags:** ${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Pull Command:**" >> $GITHUB_STEP_SUMMARY
-          echo '```
+          echo '```' >> $GITHUB_STEP_SUMMARY
           echo "docker pull ${{ env.DOCKER_IMAGE }}:latest" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
