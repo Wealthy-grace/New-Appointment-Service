@@ -1,0 +1,303 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: appointment-service-config
+  namespace: student-housing
+data:
+  SPRING_APPLICATION_NAME: "Appointment-Service"
+  SERVER_PORT: "8083"
+
+  # Spring Profile Configuration
+  SPRING_PROFILES_ACTIVE: "default"
+
+  # MongoDB Configuration
+  SPRING_DATA_MONGODB_URI: "mongodb://appointment-mongodb:27017/appointment-service"
+  SPRING_DATA_MONGODB_AUTO_INDEX_CREATION: "true"
+
+  SPRING_MAIN_ALLOW_BEAN_DEFINITION_OVERRIDING: "true"
+
+  # Actuator configuration
+  MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,info,metrics,prometheus"
+  MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS: "always"
+  MANAGEMENT_HEALTH_PROBES_ENABLED: "true"
+  MANAGEMENT_ENDPOINT_HEALTH_PROBES_ADD_ADDITIONAL_PATHS: "true"
+  MANAGEMENT_ENDPOINTS_WEB_BASE_PATH: "/actuator"
+  MANAGEMENT_SERVER_PORT: "8083"
+  MANAGEMENT_METRICS_EXPORT_PROMETHEUS_ENABLED: "true"
+
+  # FIXED: Security - OAuth2 Configuration
+  # Issuer URI matches token issuer (localhost:8080)
+  # JWK Set URI uses internal K8s service (keycloak:8080)
+  SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ENABLED: "true"
+  SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: "http://localhost:8080/realms/friendly-housing"
+  SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: "http://keycloak:8080/realms/friendly-housing/protocol/openid-connect/certs"
+
+  # Keycloak Admin Client Configuration (internal K8s service)
+  KEYCLOAK_AUTH_SERVER_URL: "http://keycloak:8080"
+  KEYCLOAK_REALM: "friendly-housing"
+  KEYCLOAK_RESOURCE: "user-service"
+
+  # Service URLs - Inter-service communication - UPDATED to use -app suffix
+  APP_SERVICES_USER_SERVICE_URL: "http://user-service-app:8081"
+  APP_SERVICES_PROPERTY_SERVICE_URL: "http://property-service-app:8082"
+
+  # Feign Client Timeout Configuration (in milliseconds)
+  FEIGN_CLIENT_CONFIG_DEFAULT_CONNECTTIMEOUT: "10000"
+  FEIGN_CLIENT_CONFIG_DEFAULT_READTIMEOUT: "30000"
+  FEIGN_CLIENT_CONFIG_DEFAULT_LOGGERLEVEL: "FULL"
+
+  # Logging Configuration
+  LOGGING_LEVEL_ROOT: "INFO"
+  LOGGING_LEVEL_COM_EXAMPLE_APPOINTMENTSERVICE: "DEBUG"
+  LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_DATA_MONGODB_CORE_MONGOTEMPLATE: "DEBUG"
+  LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_DATA_MONGODB: "DEBUG"
+  LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_WEB: "DEBUG"
+  LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SECURITY: "DEBUG"
+  LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SECURITY_OAUTH2: "DEBUG"
+
+  SPRING_CLOUD_COMPATIBILITY_VERIFIER_ENABLED: "false"
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: appointment-service-secret
+  namespace: student-housing
+type: Opaque
+stringData:
+  KEYCLOAK_CREDENTIALS_SECRET: "w17mfIu8cNiHihx8hYZEHLkEkjEA1BIf"
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: appointment-mongodb-pvc
+  namespace: student-housing
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: appointment-mongodb-config-pvc
+  namespace: student-housing
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 500Mi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: appointment-mongodb
+  namespace: student-housing
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: appointment-mongodb
+  template:
+    metadata:
+      labels:
+        app: appointment-mongodb
+    spec:
+      containers:
+        - name: mongodb
+          image: mongo:7.0
+          ports:
+            - containerPort: 27017
+          env:
+            - name: MONGO_INITDB_DATABASE
+              value: "appointment-service"
+          volumeMounts:
+            - name: mongodb-data
+              mountPath: /data/db
+            - name: mongodb-config
+              mountPath: /data/configdb
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          livenessProbe:
+            exec:
+              command:
+                - mongosh
+                - --eval
+                - db.runCommand("ping").ok
+                - --quiet
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - mongosh
+                - --eval
+                - db.runCommand("ping").ok
+                - --quiet
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+      volumes:
+        - name: mongodb-data
+          persistentVolumeClaim:
+            claimName: appointment-mongodb-pvc
+        - name: mongodb-config
+          persistentVolumeClaim:
+            claimName: appointment-mongodb-config-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: appointment-mongodb
+  namespace: student-housing
+spec:
+  ports:
+    - port: 27017
+      targetPort: 27017
+  selector:
+    app: appointment-mongodb
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: appointment-service-app
+  namespace: student-housing
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: appointment-service-app
+  template:
+    metadata:
+      labels:
+        app: appointment-service-app
+    spec:
+      initContainers:
+        - name: wait-for-mongodb
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for MongoDB to be ready..."
+              until nc -z appointment-mongodb 27017; do 
+                echo "MongoDB is unavailable - sleeping"
+                sleep 2
+              done
+              echo "MongoDB is up - proceeding"
+
+        - name: wait-for-keycloak
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for Keycloak to be ready..."
+              until nc -z keycloak 8080; do 
+                echo "Keycloak is unavailable - sleeping"
+                sleep 2
+              done
+              echo "Keycloak is up - proceeding"
+
+      containers:
+        - name: appointment-service-app
+          image: godfrey10/appointment-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8083
+          envFrom:
+            - configMapRef:
+                name: appointment-service-config
+          env:
+            - name: KEYCLOAK_CREDENTIALS_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: appointment-service-secret
+                  key: KEYCLOAK_CREDENTIALS_SECRET
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8083
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 30
+            timeoutSeconds: 5
+
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8083
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+            timeoutSeconds: 5
+
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8083
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 5
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: appointment-service-app
+  namespace: student-housing
+spec:
+  type: NodePort
+  ports:
+    - port: 8083
+      targetPort: 8083
+      nodePort: 30083
+  selector:
+    app: appointment-service-app
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: appointment-service-hpa
+  namespace: student-housing
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: appointment-service-app
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

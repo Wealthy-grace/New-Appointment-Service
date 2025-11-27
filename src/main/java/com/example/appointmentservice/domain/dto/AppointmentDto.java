@@ -72,4 +72,19 @@ public class AppointmentDto {
     // Additional property fields (if not already present)
     private String propertyDescription;
     private BigDecimal propertyRentAmount;
+
+    public AppointmentDto(String id, String appointmentTitle, String description, LocalDateTime appointmentDateTime, Integer durationMinutes, AppointmentStatus status, AppointmentType type, Long propertyId, Long requesterId, Long providerId, String location, String notes) {
+        this.id = id;
+        this.appointmentTitle = appointmentTitle;
+        this.description = description;
+        this.appointmentDateTime = appointmentDateTime;
+        this.durationMinutes = durationMinutes;
+        this.status = status;
+        this.type = type;
+        this.propertyId = propertyId;
+        this.requesterId = requesterId;
+        this.providerId = providerId;
+        this.location = location;
+        this.notes = notes;
+    }
 }

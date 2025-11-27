@@ -275,14 +275,14 @@ services:
       SPRING_MAIN_ALLOW_BEAN_DEFINITION_OVERRIDING: true
 
       # Keycloak OAuth2 Configuration - Use localhost:8090 for token validation
-      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://localhost:8090/realms/friendly-housing
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://localhost:8080/realms/friendly-housing
       SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/friendly-housing/protocol/openid-connect/certs
 
       # Keycloak Admin Client Configuration - Use keycloak:8080 for internal Docker communication
       KEYCLOAK_AUTH_SERVER_URL: http://keycloak:8080
       KEYCLOAK_REALM: friendly-housing
-      KEYCLOAK_RESOURCE: appointment-service
-      KEYCLOAK_CREDENTIALS_SECRET: Lrf6ZwUcAqOnvg4fl89kKyiOLCaWDb6B
+      KEYCLOAK_RESOURCE: user-service
+      KEYCLOAK_CREDENTIALS_SECRET: w17mfIu8cNiHihx8hYZEHLkEkjEA1BIf #JtVSo7F8eeF5HwUBESVtdlRfdRAP2vAY
 
       # Service URLs - Inter-service communication (USE CONTAINER NAMES)
       APP_SERVICES_USER_SERVICE_URL: http://user-service-app:8081

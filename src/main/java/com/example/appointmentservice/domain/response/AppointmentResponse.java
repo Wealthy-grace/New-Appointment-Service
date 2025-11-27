@@ -27,6 +27,21 @@ public class AppointmentResponse {
     private Integer pageNumber;
     private Integer pageSize;
 
+
+
+
+    // Success helper
+//    public static AppointmentResponse success(String message, List<AppointmentDto> appointments) {
+//        AppointmentResponse response = new AppointmentResponse();
+//        response.setSuccess(true);
+//        response.setMessage(message);
+//        response.setAppointments(appointments);
+//        return response;
+//    }
+
+    // Error helper
+
+
     // Success response with single appointment
     public static AppointmentResponse success(String message, AppointmentDto appointment) {
         AppointmentResponse response = new AppointmentResponse();

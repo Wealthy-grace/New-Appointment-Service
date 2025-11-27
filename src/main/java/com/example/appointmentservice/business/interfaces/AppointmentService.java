@@ -81,6 +81,11 @@ public interface AppointmentService {
 
     // Add the new methods I created
     AppointmentResponse getAllAppointmentsWithPropertyDetails();
+
+
     AppointmentResponse getAppointmentsByPropertyIdWithDetails(Long propertyId);
     AppointmentResponse getAppointmentsByRequesterIdWithDetails(Long requesterId);
+
+    AppointmentResponse getAllAppointments();  // For admin access to all appointments
+
 }

@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/v1/appointments")
@@ -100,6 +101,15 @@ public class AppointmentController {
         AppointmentResponse response = appointmentService.getAppointmentsByRequesterId(requesterId);
         return ResponseEntity.ok(response);
     }
+    @GetMapping
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<AppointmentResponse> getAllAppointments() {
+        log.info("Admin requested all appointments");
+        AppointmentResponse response = appointmentService.getAllAppointments();
+        return ResponseEntity.ok(response);
+    }
+
+
 
     @GetMapping("/provider/{providerId}")
     @PreAuthorize("hasRole('PROPERTY_MANAGER') or hasRole('ADMIN')")

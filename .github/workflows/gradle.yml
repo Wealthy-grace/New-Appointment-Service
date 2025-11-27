@@ -263,9 +263,9 @@ jobs:
 
       - name: Wait for RabbitMQ
         run: |
-          echo "⏳ Waiting for RabbitMQ to start..."
+          echo " Waiting for RabbitMQ to start..."
           timeout 120 bash -c 'until curl -s http://localhost:15672 > /dev/null; do echo "Waiting..."; sleep 3; done'
-          echo "✅ RabbitMQ is ready!"
+          echo " RabbitMQ is ready!"
           sleep 5
 
       - name: Start MongoDB
@@ -278,9 +278,9 @@ jobs:
 
       - name: Wait for MongoDB
         run: |
-          echo "⏳ Waiting for MongoDB to start..."
+          echo " Waiting for MongoDB to start..."
           timeout 120 bash -c 'until docker exec appointment-mongodb mongosh --eval "db.runCommand({ping:1})" --quiet > /dev/null 2>&1; do echo "Waiting..."; sleep 3; done'
-          echo "✅ MongoDB is ready!"
+          echo " MongoDB is ready!"
           sleep 5
 
       - name: Start Keycloak
@@ -297,9 +297,9 @@ jobs:
 
       - name: Wait for Keycloak
         run: |
-          echo "⏳ Waiting for Keycloak to start..."
+          echo " Waiting for Keycloak to start..."
           timeout 180 bash -c 'until curl -s http://localhost:8090/realms/master/.well-known/openid-configuration > /dev/null; do echo "Waiting..."; sleep 5; done'
-          echo "✅ Keycloak is ready!"
+          echo " Keycloak is ready!"
           sleep 10
 
       - name: Configure Keycloak
@@ -312,11 +312,11 @@ jobs:
             -d "username=admin&password=admin123&grant_type=password&client_id=admin-cli" | jq -r '.access_token')
           
           if [ "$ADMIN_TOKEN" == "null" ] || [ -z "$ADMIN_TOKEN" ]; then
-            echo "❌ Failed to get admin token"
+            echo " Failed to get admin token"
             exit 1
           fi
           
-          echo "✅ Got admin token"
+          echo " Got admin token"
           
           # Create realm
           echo "Creating realm..."
@@ -353,7 +353,7 @@ jobs:
               "credentials":[{"type":"password","value":"password123","temporary":false}]
             }' || echo "User might already exist"
           
-          echo "✅ Keycloak configuration complete"
+          echo " Keycloak configuration complete"
 
       - name: Start Appointment Service
         run: |
@@ -377,23 +377,23 @@ jobs:
             -e LOGGING_LEVEL_ORG_SPRINGFRAMEWORK=INFO \
             appointment-service:test
           
-          echo "✅ Appointment Service container started"
+          echo " Appointment Service container started"
           sleep 5
 
       - name: Wait for Appointment Service
         run: |
-          echo "⏳ Waiting for Appointment Service to start..."
+          echo " Waiting for Appointment Service to start..."
           
           # Check if container is running
           for i in {1..36}; do
             if docker ps | grep -q appointment-service-app; then
-              echo "✅ Container is running (attempt $i/36)"
+              echo " Container is running (attempt $i/36)"
           
               # Try health check - accept 200, 401, or 503 (401 = secured but running, 503 = starting)
               HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8083/actuator/health 2>/dev/null || echo "000")
           
               if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "401" ]; then
-                echo "✅ Appointment Service is ready! (HTTP $HTTP_CODE)"
+                echo " Appointment Service is ready! (HTTP $HTTP_CODE)"
                 sleep 5
                 exit 0
               fi
@@ -405,7 +405,7 @@ jobs:
                 echo "Service not responding yet..."
               fi
             else
-              echo "❌ Container not running! Checking logs..."
+              echo " Container not running! Checking logs..."
               docker logs appointment-service-app 2>&1 | tail -50
               exit 1
             fi
@@ -414,15 +414,15 @@ jobs:
             sleep 5
           done
           
-          echo "❌ Timeout waiting for service. Showing recent logs:"
+          echo " Timeout waiting for service. Showing recent logs:"
           docker logs appointment-service-app 2>&1 | tail -100
           
           echo ""
-          echo "🔍 Container status:"
+          echo " Container status:"
           docker ps -a | grep appointment-service-app || echo "Container not found"
           
           echo ""
-          echo "🔍 Network connectivity test:"
+          echo " Network connectivity test:"
           docker exec appointment-service-app ping -c 2 appointment-mongodb || echo "Cannot ping MongoDB"
           docker exec appointment-service-app ping -c 2 keycloak || echo "Cannot ping Keycloak"
           
@@ -430,7 +430,7 @@ jobs:
 
       - name: Verify Service Endpoints
         run: |
-          echo "🔍 Testing service endpoints..."
+          echo " Testing service endpoints..."
           
           # Check actuator health
           echo "Health endpoint:"
@@ -442,7 +442,7 @@ jobs:
           curl -s -o /dev/null -w "HTTP Status: %{http_code}\n" http://localhost:8083/api/v1/appointments/requester/1
           
           echo ""
-          echo "✅ Endpoint verification complete"
+          echo " Endpoint verification complete"
 
       - name: Install K6
         run: |
@@ -511,16 +511,16 @@ jobs:
       - name: Show logs on failure
         if: failure()
         run: |
-          echo "🔍 Appointment Service logs:"
+          echo " Appointment Service logs:"
           docker logs appointment-service-app || echo "Service container not found"
           echo ""
-          echo "🔍 MongoDB logs:"
+          echo " MongoDB logs:"
           docker logs appointment-mongodb || echo "MongoDB container not found"
           echo ""
-          echo "🔍 Keycloak logs:"
+          echo " Keycloak logs:"
           docker logs keycloak || echo "Keycloak container not found"
           echo ""
-          echo "🔍 RabbitMQ logs:"
+          echo " RabbitMQ logs:"
           docker logs rabbitmq || echo "RabbitMQ container not found"
 
       - name: Cleanup

@@ -1138,4 +1138,29 @@ public class AppointmentServiceImpl implements AppointmentService {
                 .propertyDescription(dto.getPropertyDescription())
                 .build();
     }
+
+    @Override
+    public AppointmentResponse getAllAppointments() {
+        List<AppointmentEntity> entities = appointmentRepository.findAll();
+
+        List<AppointmentDto> appointmentDtos = entities.stream()
+                .map(entity -> new AppointmentDto(
+                        entity.getId(),
+                        entity.getAppointmentTitle(),
+                        entity.getDescription(),
+                        entity.getAppointmentDateTime(),
+                        entity.getDurationMinutes(),
+                        entity.getStatus(),
+                        entity.getType(),
+                        entity.getPropertyId(),
+                        entity.getRequesterId(),
+                        entity.getProviderId(),
+                        entity.getLocation(),
+                        entity.getNotes()
+                ))
+                .collect(Collectors.toList());
+
+        return AppointmentResponse.success("Fetched all appointments", appointmentDtos);
+    }
+
 }
