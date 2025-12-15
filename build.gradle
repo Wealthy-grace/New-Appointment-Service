@@ -61,9 +61,12 @@ dependencies {
     // ✅ NEW: Actuator for monitoring
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
 
-    // ✅ NEW: Micrometer for metrics (optional but recommended)
+    //  NEW: Micrometer for metrics (optional but recommended)
     implementation 'io.micrometer:micrometer-registry-prometheus'
 
+    // Prometheus monitoring
+    implementation 'io.micrometer:micrometer-registry-prometheus'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
 
 
     // MongoDB - exclude embedded mongo
